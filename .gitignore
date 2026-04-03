@@ -1,0 +1,23 @@
+# 忽略所有图片（最常用格式，全覆盖）
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.tiff
+*.ico
+*.svg
+*.webp
+
+# 忽略常见数据/附件文件
+*.dat
+*.log
+*.tmp
+*.temp
+*.zip
+*.rar
+*.tar.gz
+
+# 忽略系统自动生成的垃圾文件
+.DS_Store
+Thumbs.db
