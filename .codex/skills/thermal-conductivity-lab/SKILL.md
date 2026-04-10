@@ -42,7 +42,7 @@ This is the entry skill for the Thermal-90 metal thermal conductivity project. K
 - The PDF appendix file named by the user is `code_appendix/thermal90_ir_temp.py`.
 - Raspberry Pi username is recorded in project memory. Connection credentials may be used when the user has provided them in the session, but do not write plaintext passwords into tracked files.
 - Prefer the smart hot plate route for the formal experiment; keep PTC + MOS as backup unless the user changes direction.
-- Prefer metal strip samples before thin wire samples.
+- Prefer metal wire / metal rod samples for the formal one-dimensional conduction route. Use metal strips only for thermal-image debugging or fallback checks.
 
 ## Memory Updates
 
@@ -64,6 +64,18 @@ Write updates to the smallest useful set:
 - `docs/06-experiment-log.md` for stage-level experiment history
 
 Every stage update should include: current state, next recommendation, risks.
+
+## GitHub Sync
+
+When project files are changed, save the update with git automatically:
+
+1. Verify the relevant output first.
+2. Check `git status -sb`.
+3. Stage only the files that belong to the current update unless the user explicitly asks for all changes.
+4. Commit with a short Chinese message.
+5. Push the current branch to GitHub.
+
+If the working tree contains unrelated user edits, do not silently include them.
 
 ## Subagents
 
