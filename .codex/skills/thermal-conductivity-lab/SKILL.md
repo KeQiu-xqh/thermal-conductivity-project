@@ -13,6 +13,7 @@ This is the entry skill for the Thermal-90 metal thermal conductivity project. K
 
 1. Treat the workspace as `C:\Users\28146\Desktop\thermal-conductivity-project` unless the user says otherwise.
 2. Read these before deciding:
+   - `docs/agent_memory/session-handoff.md`
    - `docs/agent_memory/current-state.md`
    - `docs/agent_memory/decisions.md`
    - `docs/agent_memory/next-actions.md`
