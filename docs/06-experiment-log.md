@@ -1,6 +1,39 @@
 # 实验日志
 
 ---
+## 2026-04-17
+
+### 实验内容
+- 围绕 Thermal-90 首次红外试测，重新核查官方 `stream_spi.py`、恢复源码目录和树莓派当前运行环境。
+- 重点排查“进入 `continuous capture mode` 后没有第一帧”的问题。
+
+### 关键现象
+- 失败时程序会停在 `Entering continuous capture mode.` 之后，没有继续输出 `FID / Min / Max / Avg / Std`。
+- 典型异常特征包括：
+  - `FRAME_MODE: 0x0 (expected 0x20)`
+  - `STATUS: 0x4 (expected 0x0)`
+  - `Mode : 0x0`
+  - `CAMERA_TYPE: 0`
+  - `CAMERA_ID: 000000000000`
+
+### 已完成排查
+- 确认 `sudo i2cdetect -y 1` 可见 `0x40`，说明 I2C 控制链路仍然存在。
+- 确认 `GPIO9/10/11` 已处于 `SPI0_MISO/MOSI/SCLK`，脚本运行时 `GPIO7/23` 会切成输出。
+- 恢复官方 `stream_spi.py` 后，问题仍可复现。
+- 通过 `PYTHONPATH=/home/piqio/thermal90_restore/pysenxor-master` 强制使用恢复源码库后，问题仍可复现。
+- 将 `MI48_SPI_MAX_SPEED_HZ` 降到 `1000000` 后，异常表现没有变化。
+- 正确测试 `BCM24` 后，没有观察到 `DATA_READY` 跳变。
+
+### 当天结论
+- 当前故障更适合描述为“间歇性初始化/状态机异常”，不是固定配置错误。
+- 卡点发生在“进入连续采集之后、第一帧 ready 之前”，不像是 GUI、`view_dat.py` 或简单脚本差异导致。
+- 同样的命令 `cd ~/thermal90_0403/pysenxor-master/example && sudo python3 stream_spi.py` 在后续又成功运行过，说明问题具有间歇性。
+
+### 后续建议
+- 成功运行时保留 working baseline：命令、目录、是否启用 GUI、日志前 20-30 行。
+- 如果再次复发，优先记录 `STATUS / Mode / CAMERA_TYPE / 是否有 FID`，避免再次混入大量无关改动。
+
+---
 ## 2026-03-27
 ### 实验内容
 - 学习树莓派主板的结构

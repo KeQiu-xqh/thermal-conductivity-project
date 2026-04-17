@@ -1,5 +1,23 @@
 # Bugs And Fixes
 
+## 10. `stream_spi.py` 间歇性卡在第一帧前
+
+- 现象：运行官方 `stream_spi.py` 时，程序可以完成初始化并打印 `Entering continuous capture mode.`，但后续没有继续输出 `FID / Min / Max / Avg / Std`，说明没有真正开始连续出帧。
+- 失败特征：异常时常见日志为 `FRAME_MODE: 0x0 (expected 0x20)`、`STATUS: 0x4 (expected 0x0)`、`Mode : 0x0`、`CAMERA_TYPE: 0`、`CAMERA_ID: 000000000000`。
+- 已排除项：
+  - 不是 I2C 失联：`sudo i2cdetect -y 1` 可见 `0x40`。
+  - 不是 SPI 复用未开启：`GPIO9/10/11` 已是 `SPI0_MISO/MOSI/SCLK`。
+  - 不是 `CS/RESET` 没被接管：脚本运行时 `GPIO7/23` 会切成输出。
+  - 不是 GUI 或 `view_dat.py` 导致：卡住时主程序还没进入本地分析链路。
+  - 不是脚本文件差异或安装库路径漂移：恢复官方 `stream_spi.py`、恢复源码目录、强制 `PYTHONPATH` 后仍可复现。
+- 关键线索：
+  - 正确测试 `BCM24` 后，没有观察到 `DATA_READY` 跳变。
+  - 用与 `stream_spi.py` 一致的初始化方式测试时，`mi48.start(stream=True)` 后 `mode` 会从 `0x0` 变到 `0x2`，但后续轮询里 `status` 持续为 `0x8`、`data_ready = 0`。
+  - 当前卡点更像“相机状态机没有完成初始化”，而不是“主程序读帧代码写错”。
+- 当前结论：该故障应记录为“间歇性初始化/状态机异常”，不是固定配置错误。
+- 重要补充：同样的命令 `cd ~/thermal90_0403/pysenxor-master/example && sudo python3 stream_spi.py` 在后续又成功运行过，说明这不是永久损坏，而是间歇性问题。
+- 后续建议：保留一份成功运行时的 working baseline，包括命令、目录、日志前 20-30 行和是否启用 GUI；下次复发时先记录 `STATUS / Mode / CAMERA_TYPE / 是否有 FID`，不要再次混入大量无关改动。
+
 更新时间：2026-04-10
 
 ## 1. SSH 无显示器环境下 OpenCV GUI 报错
