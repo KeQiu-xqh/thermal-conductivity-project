@@ -49,3 +49,9 @@
 - 现象：录制文件名字段曾用错相机 ID 属性，尾部清理也残留了旧变量名。
 - 修复：`mi48.camera_id_hex` 改为 `mi48.camera_id_hexsn`，并将尾部关闭对象改为 `mi48_reset_n`、`mi48_data_ready`、`mi48_spi_cs_n`。
 - 验证：`python -B -c "import ast, pathlib; ast.parse(pathlib.Path('code_appendix/thermal90_ir_temp.py').read_text(encoding='utf-8'))"` 通过。
+
+## 8. 首次试拍时 `DATA_READY` 脚等待可能卡住
+- 现象：脚本进入 continuous capture mode 后没有继续输出帧，用户在 VNC 里看不到热像窗口更新。
+- 线索：`/dev/i2c-1` 和 `/dev/spidev0.0` 都存在，但 `DigitalInputDevice('BCM24', pull_up=False).is_active` 为空闲低电平，且等待外部 `DATA_READY` 可能阻塞首帧。
+- 处理：将 `use_data_ready_pin` 改为 `False`，让脚本改走 `STATUS.DATA_READY` 轮询路径。
+- 备注：这比继续死等 `BCM24` 更适合作为首次闭环的稳定路径。
