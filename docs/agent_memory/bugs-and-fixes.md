@@ -45,3 +45,7 @@
 - 原因：Codex 过度偏向 Thermal-90 成像便利性，忽略了实验对象“一维金属丝”的约束。
 - 修正：主线改为直径 `3-4 mm`、长度 `200-300 mm` 的金属圆杆/粗金属丝；金属条只作为调试和备选。
 - 防复发：后续采购、实验布局和 PINN 反演说明中，不再默认使用金属条作为主样品。
+## 7. `code_appendix/thermal90_ir_temp.py` 试拍前稳定化修补
+- 现象：录制文件名字段曾用错相机 ID 属性，尾部清理也残留了旧变量名。
+- 修复：`mi48.camera_id_hex` 改为 `mi48.camera_id_hexsn`，并将尾部关闭对象改为 `mi48_reset_n`、`mi48_data_ready`、`mi48_spi_cs_n`。
+- 验证：`python -B -c "import ast, pathlib; ast.parse(pathlib.Path('code_appendix/thermal90_ir_temp.py').read_text(encoding='utf-8'))"` 通过。

@@ -272,7 +272,9 @@ with_header = True
 
 # enable saving to a file
 if args.record:
-    filename = get_filename(mi48.camera_id_hex)
+    camera_id = getattr(mi48, 'camera_id_hexsn',
+                        getattr(mi48, 'camera_id_hex', 'thermal90'))
+    filename = get_filename(camera_id)
     fd_data = open(os.path.join('.', filename+'.dat'), 'w')
 
 mi48.start(stream=True, with_header=with_header)
@@ -341,8 +343,18 @@ except NameError:
 cv.destroyAllWindows()
 
 # 清理 GPIO 引脚资源
-reset_pin.close()
-dr_pin.close()
+try:
+    mi48_reset_n.close()
+except NameError:
+    pass
+try:
+    mi48_data_ready.close()
+except NameError:
+    pass
+try:
+    mi48_spi_cs_n.close()
+except NameError:
+    pass
 # 如果你之前启用了 cs_pin，请也添加：
 # cs_pin.close()
 
