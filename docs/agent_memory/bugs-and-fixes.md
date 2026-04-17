@@ -55,3 +55,9 @@
 - 线索：`/dev/i2c-1` 和 `/dev/spidev0.0` 都存在，但 `DigitalInputDevice('BCM24', pull_up=False).is_active` 为空闲低电平，且等待外部 `DATA_READY` 可能阻塞首帧。
 - 处理：将 `use_data_ready_pin` 改为 `False`，让脚本改走 `STATUS.DATA_READY` 轮询路径。
 - 备注：这比继续死等 `BCM24` 更适合作为首次闭环的稳定路径。
+
+## 9. 关闭 `DATA_READY` 脚后 `mi48_data_ready` 变成未定义/空值
+- 现象：运行 `thermal90_ir_temp.py` 时在 `MI48(...)` 初始化处报 `NameError: name 'mi48_data_ready' is not defined`，随后在尾部关闭资源时还可能触发 `AttributeError`。
+- 原因：关闭外部 DATA_READY 脚后，脚本仍无条件把 `mi48_data_ready` 传给构造函数，并在退出阶段尝试关闭它。
+- 修复：将 `mi48_data_ready` 设为 `None`，并用 `mi48_kwargs` 只在其存在时传入 `data_ready` 参数；退出时也只在非空时关闭。
+- 验证：语法检查通过，初始化路径恢复为可继续进入实时采集。

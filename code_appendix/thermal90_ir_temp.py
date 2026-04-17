@@ -214,6 +214,8 @@ mi48_spi_cs_n = DigitalOutputDevice("BCM7", active_high=False,
 use_data_ready_pin = False
 if use_data_ready_pin:
     mi48_data_ready = DigitalInputDevice("BCM24", pull_up=False)
+else:
+    mi48_data_ready = None
 
 # connect the reset line to allow to drive it by SW (GPIO23, J8:16)
 mi48_reset_n = DigitalOutputDevice("BCM23", active_high=False,
@@ -240,8 +242,11 @@ class MI48_reset:
 # ======================================
 # Create an MI48 interface object
 # ======================================
-mi48 = MI48([i2c, spi], data_ready=mi48_data_ready,
-            reset_handler=MI48_reset(pin=mi48_reset_n))
+mi48_kwargs = dict(reset_handler=MI48_reset(pin=mi48_reset_n))
+if mi48_data_ready is not None:
+    mi48_kwargs["data_ready"] = mi48_data_ready
+
+mi48 = MI48([i2c, spi], **mi48_kwargs)
 
 # print out camera info
 camera_info = mi48.get_camera_info()
@@ -347,10 +352,11 @@ try:
     mi48_reset_n.close()
 except NameError:
     pass
-try:
-    mi48_data_ready.close()
-except NameError:
-    pass
+if mi48_data_ready is not None:
+    try:
+        mi48_data_ready.close()
+    except AttributeError:
+        pass
 try:
     mi48_spi_cs_n.close()
 except NameError:
