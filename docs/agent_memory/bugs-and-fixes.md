@@ -1,81 +1,30 @@
 # Bugs And Fixes
 
-## 10. `stream_spi.py` 间歇性卡在第一帧前
+更新：2026-04-17
 
-- 现象：运行官方 `stream_spi.py` 时，程序可以完成初始化并打印 `Entering continuous capture mode.`，但后续没有继续输出 `FID / Min / Max / Avg / Std`，说明没有真正开始连续出帧。
-- 失败特征：异常时常见日志为 `FRAME_MODE: 0x0 (expected 0x20)`、`STATUS: 0x4 (expected 0x0)`、`Mode : 0x0`、`CAMERA_TYPE: 0`、`CAMERA_ID: 000000000000`。
-- 已排除项：
-  - 不是 I2C 失联：`sudo i2cdetect -y 1` 可见 `0x40`。
-  - 不是 SPI 复用未开启：`GPIO9/10/11` 已是 `SPI0_MISO/MOSI/SCLK`。
-  - 不是 `CS/RESET` 没被接管：脚本运行时 `GPIO7/23` 会切成输出。
-  - 不是 GUI 或 `view_dat.py` 导致：卡住时主程序还没进入本地分析链路。
-  - 不是脚本文件差异或安装库路径漂移：恢复官方 `stream_spi.py`、恢复源码目录、强制 `PYTHONPATH` 后仍可复现。
-- 关键线索：
-  - 正确测试 `BCM24` 后，没有观察到 `DATA_READY` 跳变。
-  - 用与 `stream_spi.py` 一致的初始化方式测试时，`mi48.start(stream=True)` 后 `mode` 会从 `0x0` 变到 `0x2`，但后续轮询里 `status` 持续为 `0x8`、`data_ready = 0`。
-  - 当前卡点更像“相机状态机没有完成初始化”，而不是“主程序读帧代码写错”。
-- 当前结论：该故障应记录为“间歇性初始化/状态机异常”，不是固定配置错误。
-- 重要补充：同样的命令 `cd ~/thermal90_0403/pysenxor-master/example && sudo python3 stream_spi.py` 在后续又成功运行过，说明这不是永久损坏，而是间歇性问题。
-- 后续建议：保留一份成功运行时的 working baseline，包括命令、目录、日志前 20-30 行和是否启用 GUI；下次复发时先记录 `STATUS / Mode / CAMERA_TYPE / 是否有 FID`，不要再次混入大量无关改动。
+## 1. SSH 环境下 OpenCV GUI 无法显示
 
-更新时间：2026-04-10
+- 现象：在普通 SSH 终端运行热像脚本时，OpenCV / Qt 报 `could not connect to display`
+- 结论：这不是采集失败，而是显示环境缺失
+- 处理：需要在 VNC 桌面终端运行，或者显式配置 `DISPLAY` / `XAUTHORITY`
 
-## 1. SSH 无显示器环境下 OpenCV GUI 报错
+## 2. `stream_spi.py` 间歇性卡在第一帧前
 
-- 现象：通过 SSH 运行 `stream_spi.py` 时，OpenCV 尝试弹窗，出现 GUI / Qt / display 相关错误。
-- 原因：普通 SSH 终端没有图形显示环境。
-- 修复：在无显示器采集模式下关闭 GUI 显示逻辑，只保留采集和输出。
-- 验证：关闭 GUI 后，相机可以连续输出每帧温度统计。
+- 现象：程序打印 `Entering continuous capture mode.` 后没有继续输出帧统计
+- 特征：失败时常伴随 `FRAME_MODE: 0x0`、`STATUS: 0x4`、`Mode : 0x0`、`CAMERA_TYPE: 0`
+- 结论：更像间歇性初始化 / 状态机异常，不是固定配置错误
+- 补充：同样命令后续又能成功运行，证明问题具有间歇性
 
-## 2. `--record` 模式中相机 ID 字段不兼容
+## 3. Windows 不能“直接看录像”
 
-- 现象：运行 `sudo python3 stream_spi.py -r` 时出现：
-  - `AttributeError: 'MI48' object has no attribute 'camera_id_hex'`
-- 原因：当前安装的库中字段名不是 `camera_id_hex`。
-- 修复：将 `mi48.camera_id_hex` 改为 `mi48.camera_id_hexsn`。
-- 验证：修改后已经成功录制 `.dat` 文件。
+- 现象：采集回来的原始文件不能像普通视频那样直接双击播放
+- 原因：原始热像记录保存的是逐帧温度矩阵，不是 `mp4/avi`
+- 结论：这不是数据无效，而是数据格式本来就不是标准视频
+- 处理：通过 [`code/view_dat.py`](/C:/Users/28146/Desktop/thermal-conductivity-project/code/view_dat.py) 生成 GIF 回看层
+- 当前结果：已能输出 `outputs/preview/<stem>_preview.gif`
 
-## 3. VNC 能显示桌面但热像窗口不弹出
+## 4. 当前 ROI 还不是最终样品 ROI
 
-- 现象：VNC Viewer 已经能看到树莓派桌面，但运行 GUI 版本脚本时没有热像窗口。
-- 原因：文件中显示逻辑被写成了 `if False:`，即使 `GUI = True` 也不会执行显示。
-- 修复：将 while 循环中的显示判断恢复为 `if GUI:`。
-- 验证：恢复后，电脑端通过 VNC 成功看到 Thermal-90 实时热像视频窗口。
-
-## 4. `code_appendix/thermal90_ir_temp.py` 仍有待核查风险
-
-- 现象：当前文件中仍可见 `mi48.camera_id_hex`。
-- 风险：如果直接在当前库环境运行录制模式，可能再次触发相机 ID 字段不兼容。
-- 现象：文件尾部出现 `reset_pin.close()` / `dr_pin.close()`。
-- 风险：当前脚本前文使用的是 `mi48_reset_n` / `mi48_data_ready`，尾部变量名可能不一致。
-- 当前处理：先记录为待核查，不在本轮修改附录代码。
-
-## 5. IDE 中文文件名与磁盘文件名已确认
-
-- 现象：IDE 标签页显示 `Thermal-90 热像仪红外成温.py`，当前文件系统列表中 `code_appendix` 看到的是 `thermal90_ir_temp.py`。
-- 原因：用户已将中文文件名命名为 `thermal90_ir_temp.py`。
-- 当前处理：不再按“文件丢失”处理；后续以 `code_appendix/thermal90_ir_temp.py` 为准。
-
-## 6. 实验样品路线纠偏：不能默认把金属条当主样品
-
-- 现象：Codex 曾把“金属条”作为正式实验主样品推荐。
-- 用户纠正：实验目标是一维金属丝导热系数测量，主样品应优先考虑金属丝/金属圆杆。
-- 原因：Codex 过度偏向 Thermal-90 成像便利性，忽略了实验对象“一维金属丝”的约束。
-- 修正：主线改为直径 `3-4 mm`、长度 `200-300 mm` 的金属圆杆/粗金属丝；金属条只作为调试和备选。
-- 防复发：后续采购、实验布局和 PINN 反演说明中，不再默认使用金属条作为主样品。
-## 7. `code_appendix/thermal90_ir_temp.py` 试拍前稳定化修补
-- 现象：录制文件名字段曾用错相机 ID 属性，尾部清理也残留了旧变量名。
-- 修复：`mi48.camera_id_hex` 改为 `mi48.camera_id_hexsn`，并将尾部关闭对象改为 `mi48_reset_n`、`mi48_data_ready`、`mi48_spi_cs_n`。
-- 验证：`python -B -c "import ast, pathlib; ast.parse(pathlib.Path('code_appendix/thermal90_ir_temp.py').read_text(encoding='utf-8'))"` 通过。
-
-## 8. 首次试拍时 `DATA_READY` 脚等待可能卡住
-- 现象：脚本进入 continuous capture mode 后没有继续输出帧，用户在 VNC 里看不到热像窗口更新。
-- 线索：`/dev/i2c-1` 和 `/dev/spidev0.0` 都存在，但 `DigitalInputDevice('BCM24', pull_up=False).is_active` 为空闲低电平，且等待外部 `DATA_READY` 可能阻塞首帧。
-- 处理：将 `use_data_ready_pin` 改为 `False`，让脚本改走 `STATUS.DATA_READY` 轮询路径。
-- 备注：这比继续死等 `BCM24` 更适合作为首次闭环的稳定路径。
-
-## 9. 关闭 `DATA_READY` 脚后 `mi48_data_ready` 变成未定义/空值
-- 现象：运行 `thermal90_ir_temp.py` 时在 `MI48(...)` 初始化处报 `NameError: name 'mi48_data_ready' is not defined`，随后在尾部关闭资源时还可能触发 `AttributeError`。
-- 原因：关闭外部 DATA_READY 脚后，脚本仍无条件把 `mi48_data_ready` 传给构造函数，并在退出阶段尝试关闭它。
-- 修复：将 `mi48_data_ready` 设为 `None`，并用 `mi48_kwargs` 只在其存在时传入 `data_ready` 参数；退出时也只在非空时关闭。
-- 验证：语法检查通过，初始化路径恢复为可继续进入实时采集。
+- 现象：当前训练数据已从固定矩形 ROI 构建，但该 ROI 仍是“疑似金属丝候选区域”
+- 风险：如果直接把当前 ROI 当成正式样品区域，后续反演可能混入背景或偏离真实样品位置
+- 处理：下一步先固定样品物理 ROI，再进入正式建模

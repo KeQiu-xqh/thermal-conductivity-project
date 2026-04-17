@@ -1,82 +1,84 @@
-# PINN + 红外测量热导率项目
+# Thermal-90 金属导热系数实验项目
 
-本仓库用于记录我使用树莓派 5、Thermal-90 热像仪与 PINN 方法进行热导率测量的学习与实验过程。
+本仓库用于记录和维护基于 **Raspberry Pi 5 + Thermal-90 + 红外热像 + 后续 PINN/反演** 的实验代码与文档。
 
-## 项目内容
+## 当前状态
 
-本仓库当前主要包含：
+截至 `2026-04-17`，项目已经完成以下闭环：
 
-- 树莓派设置与无显示器 SSH 连接
-- Thermal-90 热像仪连接与配置
-- 基本的 Linux 命令学习
-- Git 和 GitHub 的使用学习
-- Markdown 实验笔记
-- 热像数据采集、保存与本地分析
-- 后续 PINN 训练与热导率反演准备
+- 官方 `stream_spi.py` 采集链路可运行
+- [`code/thermal90_ir_temp.py`](/C:/Users/28146/Desktop/thermal-conductivity-project/code/thermal90_ir_temp.py) 可运行并在 VNC 下正常显示热像
+- 原始热像数据已成功采集
+- [`code/view_dat.py`](/C:/Users/28146/Desktop/thermal-conductivity-project/code/view_dat.py) 可生成静态分析图和 GIF 回看
+- [`code/construct_training_data.py`](/C:/Users/28146/Desktop/thermal-conductivity-project/code/construct_training_data.py) 可从固定 ROI 构建训练数据
 
-## 当前进展（更新至 2026-04-03）
+当前主线不是“搭环境”，而是：
 
-目前已经完成：
+1. 固定金属丝 ROI
+2. 规范原始数据命名和实验记录
+3. 把训练数据进一步收敛到更适合 1D 导热反演的格式
 
-- 树莓派系统烧录
-- 电脑通过热点和 SSH 连接树莓派
-- 基本 Linux 命令与 Python 运行测试
-- Thermal-90 正确接入树莓派 GPIO
-- SPI / I2C 相关依赖安装与配置
-- 开启 `i2c_arm`，确认 `i2c-1` 可用
-- 在 `i2c-1` 上扫描到 Thermal-90 地址 `0x40`
-- 官方 `stream_spi.py` demo 成功运行
-- 在无显示器 SSH 环境下关闭 OpenCV GUI 报错
-- 使用 `-r` 录制模式成功保存 `.dat` 热像数据
-- 将数据文件拷贝到本地电脑
-- 在本地电脑读取 `.dat` 数据并生成热图与 ROI 温度曲线
+## 目录说明
 
-这说明：
+- [`code/`](/C:/Users/28146/Desktop/thermal-conductivity-project/code)
+  - 当前正式使用的采集与分析脚本
+- [`code_appendix/`](/C:/Users/28146/Desktop/thermal-conductivity-project/code_appendix)
+  - 讲义附录、参考版、历史副本
+- [`docs/`](/C:/Users/28146/Desktop/thermal-conductivity-project/docs)
+  - 实验日志、项目说明、agent 协作记忆、参考资料
+- [`docs/references/`](/C:/Users/28146/Desktop/thermal-conductivity-project/docs/references)
+  - 讲义原稿和 PDF
+- [`data/raw/`](/C:/Users/28146/Desktop/thermal-conductivity-project/data/raw)
+  - 本地原始热像数据
+- [`data/derived/`](/C:/Users/28146/Desktop/thermal-conductivity-project/data/derived)
+  - 本地派生训练数据和中间结果
+- [`outputs/preview/`](/C:/Users/28146/Desktop/thermal-conductivity-project/outputs/preview)
+  - GIF 等回看结果
+- [`outputs/figures/`](/C:/Users/28146/Desktop/thermal-conductivity-project/outputs/figures)
+  - 静态分析图
 
-**树莓派 + Thermal-90 的采集链路已经打通，当前项目已进入热像数据预处理阶段。**
+## 常用入口
 
-## 仓库目标
+### 1. 采集热像
 
-通过本项目逐步学习并完成：
+树莓派上运行：
 
-1. 树莓派的设置与远程使用
-2. 基本 Linux 命令的实际应用
-3. Git 和 GitHub 工作流程
-4. Markdown 笔记记录习惯
-5. Thermal-90 热像数据采集
-6. 本地电脑上的热像可视化分析
-7. PINN 训练与热导率反演
-8. 完整的热导率实验流程记录
+```bash
+cd ~/experiment/code
+sudo python3 thermal90_ir_temp.py
+sudo python3 thermal90_ir_temp.py -r
+```
 
-## 当前推荐阅读顺序
+项目内对应脚本：
 
-如果是从头查看本项目，建议按下面顺序阅读：
+- [`code/thermal90_ir_temp.py`](/C:/Users/28146/Desktop/thermal-conductivity-project/code/thermal90_ir_temp.py)
 
-1. 项目计划
-2. 树莓派基础操作笔记
-3. 实验日志
-4. 后续代码与数据分析脚本
+### 2. 回看与静态分析
 
-## 后续计划
+Windows 本地运行：
 
-接下来重点推进：
+```powershell
+C:\Users\28146\anaconda3\python.exe code\view_dat.py "C:\Users\28146\Desktop\thermal-conductivity-project\data\raw\<your-file>.dat"
+```
 
-- 规范热像数据采集流程
-- 进一步分析 ROI 温度-时间曲线
-- 固定实验热源与视场位置
-- 采集更标准的样品加热/冷却数据
-- 整理 PINN 所需训练数据格式
-- 在本地电脑开始 PINN 训练与反演验证
+### 3. 构建 ROI 训练数据
 
-## Codex 协作记忆
+```powershell
+C:\Users\28146\anaconda3\python.exe code\construct_training_data.py "C:\Users\28146\Desktop\thermal-conductivity-project\data\raw\<your-file>.dat"
+```
 
-从 2026-04-10 起，新增 `docs/agent_memory/` 作为 Codex 的项目记忆区。
+## 文档入口
 
-这个目录用于记录：
+- 实验日志：[`docs/06-experiment-log.md`](/C:/Users/28146/Desktop/thermal-conductivity-project/docs/06-experiment-log.md)
+- 当前状态：[`docs/agent_memory/current-state.md`](/C:/Users/28146/Desktop/thermal-conductivity-project/docs/agent_memory/current-state.md)
+- 问题与修复：[`docs/agent_memory/bugs-and-fixes.md`](/C:/Users/28146/Desktop/thermal-conductivity-project/docs/agent_memory/bugs-and-fixes.md)
+- 决策记录：[`docs/agent_memory/decisions.md`](/C:/Users/28146/Desktop/thermal-conductivity-project/docs/agent_memory/decisions.md)
+- 下一步动作：[`docs/agent_memory/next-actions.md`](/C:/Users/28146/Desktop/thermal-conductivity-project/docs/agent_memory/next-actions.md)
+- 讲义参考：[`docs/references/结合红外热像与AI的金属导热系数测量.md`](/C:/Users/28146/Desktop/thermal-conductivity-project/docs/references/结合红外热像与AI的金属导热系数测量.md)
 
-- 当前真实实验状态
-- 已遇到的困难、bug 与修复
-- 实验路线和采购决策
-- 下一步短期动作
+## 数据管理规则
 
-更新原则：每完成一个阶段性进展后更新，不做空泛日报；不记录任何密码或私人连接信息。
+- 原始热像数据、GIF、PNG、训练输出默认只保留在本地，不纳入 git
+- 仓库只跟踪：代码、文档、规则、少量必要元信息
+- 新实验数据统一放在 `data/raw/`
+- 由脚本生成的结果统一落到 `data/derived/`、`outputs/preview/`、`outputs/figures/`

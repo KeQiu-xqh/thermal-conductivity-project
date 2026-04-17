@@ -6,7 +6,11 @@ import numpy as np
 from PIL import Image
 
 
-DEFAULT_FILENAME = "2000.0.0.000000--20260403-165346.dat"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+RAW_DATA_DIR = PROJECT_ROOT / "data" / "raw"
+FIGURES_DIR = PROJECT_ROOT / "outputs" / "figures"
+PREVIEW_DIR = PROJECT_ROOT / "outputs" / "preview"
+LEGACY_DESKTOP_FILE = Path.home() / "Desktop" / "2000.0.0.000000--20260403-165346.dat"
 FRAME_HEIGHT = 62
 FRAME_WIDTH = 80
 DEFAULT_GIF_FPS = 12
@@ -16,12 +20,12 @@ DEFAULT_GIF_SCALE = 6
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Read a Thermal-90 .dat file and generate basic plots."
+        description="Read a Thermal-90 raw data file and generate preview figures."
     )
     parser.add_argument(
         "dat_path",
         nargs="?",
-        help="Path to the .dat file. If omitted, falls back to the legacy desktop file.",
+        help="Path to the raw thermal data file. If omitted, use the newest file in data/raw/.",
     )
     parser.add_argument("--gif-fps", type=int, default=DEFAULT_GIF_FPS)
     parser.add_argument("--gif-stride", type=int, default=DEFAULT_GIF_STRIDE)
@@ -29,10 +33,22 @@ def parse_args():
     return parser.parse_args()
 
 
+def find_latest_raw_data():
+    if RAW_DATA_DIR.exists():
+        candidates = sorted(
+            [p for p in RAW_DATA_DIR.iterdir() if p.is_file()],
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        if candidates:
+            return candidates[0]
+    return LEGACY_DESKTOP_FILE
+
+
 def resolve_file_path(dat_path):
     if dat_path:
         return Path(dat_path).expanduser().resolve()
-    return (Path.home() / "Desktop" / DEFAULT_FILENAME).resolve()
+    return find_latest_raw_data().resolve()
 
 
 def load_frames(file_path):
@@ -47,7 +63,7 @@ def load_frames(file_path):
         values = [float(x) for x in line.split()]
         frames.append(values)
 
-    frames = np.array(frames)
+    frames = np.array(frames, dtype=np.float32)
     print("原始数组形状:", frames.shape)
 
     num_pixels = frames.shape[1]
@@ -60,7 +76,12 @@ def load_frames(file_path):
     return frames_3d
 
 
-def save_frames_compare(frames_3d):
+def ensure_output_dirs():
+    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+    PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def save_frames_compare(frames_3d, stem):
     frame_indices = [0, min(10, frames_3d.shape[0] - 1), min(20, frames_3d.shape[0] - 1)]
     valid_indices = sorted(set(frame_indices))
 
@@ -75,12 +96,13 @@ def save_frames_compare(frames_3d):
         ax.set_ylabel("Y")
 
     fig.colorbar(im, ax=axes, shrink=0.8, label="Temperature (C)")
-    plt.savefig("frames_compare.png", dpi=200, bbox_inches="tight")
-    print("已保存 frames_compare.png")
+    output_path = FIGURES_DIR / f"{stem}_frames_compare.png"
+    plt.savefig(output_path, dpi=200, bbox_inches="tight")
+    print("已保存", output_path)
     plt.close()
 
 
-def save_center_plots(frames_3d):
+def save_center_plots(frames_3d, stem):
     center_y, center_x = 31, 40
     center_temp = frames_3d[:, center_y, center_x]
 
@@ -90,8 +112,9 @@ def save_center_plots(frames_3d):
     plt.xlabel("Frame Index")
     plt.ylabel("Temperature (C)")
     plt.grid(True)
-    plt.savefig("center_temp_curve.png", dpi=200, bbox_inches="tight")
-    print("已保存 center_temp_curve.png")
+    center_temp_path = FIGURES_DIR / f"{stem}_center_temp_curve.png"
+    plt.savefig(center_temp_path, dpi=200, bbox_inches="tight")
+    print("已保存", center_temp_path)
     plt.close()
 
     cy, cx = center_y, center_x
@@ -104,8 +127,9 @@ def save_center_plots(frames_3d):
     plt.xlabel("Frame Index")
     plt.ylabel("Temperature (C)")
     plt.grid(True)
-    plt.savefig("center_roi_curve.png", dpi=200, bbox_inches="tight")
-    print("已保存 center_roi_curve.png")
+    center_roi_path = FIGURES_DIR / f"{stem}_center_roi_curve.png"
+    plt.savefig(center_roi_path, dpi=200, bbox_inches="tight")
+    print("已保存", center_roi_path)
     plt.close()
 
     print("中心 5x5 ROI 前 5 帧温度:", roi_temp[:5])
@@ -114,7 +138,7 @@ def save_center_plots(frames_3d):
     print("中心 5x5 ROI 最高温:", np.max(roi_temp))
 
 
-def save_hot_roi_plot(frames_3d):
+def save_hot_roi_plot(frames_3d, stem):
     first_frame = frames_3d[0]
     last_frame = frames_3d[-1]
 
@@ -139,8 +163,9 @@ def save_hot_roi_plot(frames_3d):
     plt.xlabel("Frame Index")
     plt.ylabel("Temperature (C)")
     plt.grid(True)
-    plt.savefig("hot_roi_curve.png", dpi=200, bbox_inches="tight")
-    print("已保存 hot_roi_curve.png")
+    hot_roi_path = FIGURES_DIR / f"{stem}_hot_roi_curve.png"
+    plt.savefig(hot_roi_path, dpi=200, bbox_inches="tight")
+    print("已保存", hot_roi_path)
     plt.close()
 
     print("热区 ROI 前 5 帧温度:", hot_roi_temp[:5])
@@ -149,7 +174,7 @@ def save_hot_roi_plot(frames_3d):
     print("热区 ROI 最高温:", np.max(hot_roi_temp))
 
 
-def save_preview_gif(frames_3d, file_path, fps, stride, scale):
+def save_preview_gif(frames_3d, stem, fps, stride, scale):
     fps = max(1, fps)
     stride = max(1, stride)
     scale = max(1, scale)
@@ -173,7 +198,7 @@ def save_preview_gif(frames_3d, file_path, fps, stride, scale):
             )
         images.append(image)
 
-    output_path = Path(f"{file_path.stem}_preview.gif")
+    output_path = PREVIEW_DIR / f"{stem}_preview.gif"
     images[0].save(
         output_path,
         save_all=True,
@@ -181,22 +206,24 @@ def save_preview_gif(frames_3d, file_path, fps, stride, scale):
         duration=int(1000 / fps),
         loop=0,
     )
-    print(f"宸蹭繚瀛?{output_path}")
+    print("已保存", output_path)
 
 
 def main():
     args = parse_args()
     file_path = resolve_file_path(args.dat_path)
     if not file_path.exists():
-        raise FileNotFoundError(f"未找到 .dat 文件: {file_path}")
+        raise FileNotFoundError(f"未找到原始数据文件: {file_path}")
 
+    ensure_output_dirs()
     frames_3d = load_frames(file_path)
-    save_frames_compare(frames_3d)
-    save_center_plots(frames_3d)
-    save_hot_roi_plot(frames_3d)
+    stem = file_path.stem
+    save_frames_compare(frames_3d, stem)
+    save_center_plots(frames_3d, stem)
+    save_hot_roi_plot(frames_3d, stem)
     save_preview_gif(
         frames_3d,
-        file_path,
+        stem,
         fps=args.gif_fps,
         stride=args.gif_stride,
         scale=args.gif_scale,

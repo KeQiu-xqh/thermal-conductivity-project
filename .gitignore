@@ -1,4 +1,32 @@
-# 忽略所有图片（最常用格式，全覆盖）
+# Local experiment data and generated outputs
+/data/raw/*
+/data/derived/*
+/outputs/preview/*
+/outputs/figures/*
+!/data/raw/.gitkeep
+!/data/derived/.gitkeep
+!/outputs/preview/.gitkeep
+!/outputs/figures/.gitkeep
+
+# Legacy root-level generated artifacts
+/video
+/video_preview.gif
+/frames_compare.png
+/center_temp_curve.png
+/center_roi_curve.png
+/hot_roi_curve.png
+/training_data_output/
+
+# Common generated files
+*.dat
+*.log
+*.tmp
+*.temp
+*.zip
+*.rar
+*.tar.gz
+
+# Common image exports
 *.png
 *.jpg
 *.jpeg
@@ -9,15 +37,10 @@
 *.svg
 *.webp
 
-# 忽略常见数据/附件文件
-*.dat
-*.log
-*.tmp
-*.temp
-*.zip
-*.rar
-*.tar.gz
-
-# 忽略系统自动生成的垃圾文件
+# System junk
 .DS_Store
 Thumbs.db
+
+# Python cache
+__pycache__/
+*.pyc

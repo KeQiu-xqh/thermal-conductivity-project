@@ -211,7 +211,7 @@ mi48_spi_cs_n = DigitalOutputDevice("BCM7", active_high=False,
 # The gpiozero library uses the BROADCOM convention, hence we have
 # "BCM24" below, or just 24.
 # Change this to False to test DATA_READY flag, instead of pin
-use_data_ready_pin = False
+use_data_ready_pin = True
 if use_data_ready_pin:
     mi48_data_ready = DigitalInputDevice("BCM24", pull_up=False)
 else:

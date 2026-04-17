@@ -5,10 +5,10 @@ from pathlib import Path
 
 import numpy as np
 
-from view_dat import load_frames, resolve_file_path
+from view_dat import PROJECT_ROOT, RAW_DATA_DIR, load_frames, resolve_file_path
 
 
-DEFAULT_OUTPUT_DIR = "training_data_output"
+DERIVED_DATA_DIR = PROJECT_ROOT / "data" / "derived"
 DEFAULT_FPS = 6.375
 DEFAULT_X_MIN = 44
 DEFAULT_X_MAX = 50
@@ -18,12 +18,12 @@ DEFAULT_Y_MAX = 38
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Build ROI-based training data from a Thermal-90 .dat file."
+        description="Build ROI-based training data from a Thermal-90 raw data file."
     )
     parser.add_argument(
         "dat_path",
         nargs="?",
-        help="Path to the .dat file. If omitted, falls back to the legacy desktop file.",
+        help="Path to the raw thermal data file. If omitted, use the newest file in data/raw/.",
     )
     parser.add_argument("--fps", type=float, default=DEFAULT_FPS, help="Frame rate used to build the time axis.")
     parser.add_argument("--x-min", type=int, default=DEFAULT_X_MIN, help="Inclusive ROI x start.")
@@ -32,7 +32,7 @@ def parse_args():
     parser.add_argument("--y-max", type=int, default=DEFAULT_Y_MAX, help="Exclusive ROI y end.")
     parser.add_argument(
         "--output-dir",
-        default=DEFAULT_OUTPUT_DIR,
+        default=str(DERIVED_DATA_DIR),
         help="Directory where npz/csv/meta files will be written.",
     )
     return parser.parse_args()
@@ -64,8 +64,7 @@ def build_roi_training_data(frames_3d, fps, x_min, x_max, y_min, y_max):
             for local_x in range(roi_width):
                 global_x = x_min + local_x
                 temperature = float(frame[local_y, local_x])
-                sample = [global_x, global_y, t]
-                inputs.append(sample)
+                inputs.append([global_x, global_y, t])
                 targets.append(temperature)
                 rows.append([frame_idx, t, global_x, global_y, local_x, local_y, temperature])
 
@@ -91,10 +90,11 @@ def save_outputs(output_dir, dat_path, fps, x_min, x_max, y_min, y_max, inputs, 
 
     meta = {
         "source_file": str(dat_path),
+        "source_parent": str(dat_path.parent),
         "fps": fps,
         "interval_sec": 1.0 / fps,
         "frame_count": int(roi_frames.shape[0]),
-        "frame_shape": [int(frames) for frames in roi_frames.shape[1:]],
+        "roi_shape": [int(v) for v in roi_frames.shape[1:]],
         "roi": {
             "x_min": x_min,
             "x_max": x_max,
@@ -112,9 +112,9 @@ def save_outputs(output_dir, dat_path, fps, x_min, x_max, y_min, y_max, inputs, 
     with open(meta_path, "w", encoding="utf-8") as handle:
         json.dump(meta, handle, ensure_ascii=False, indent=2)
 
-    print("已保存:", npz_path)
-    print("已保存:", csv_path)
-    print("已保存:", meta_path)
+    print("已保存", npz_path)
+    print("已保存", csv_path)
+    print("已保存", meta_path)
 
 
 def main():
@@ -140,7 +140,7 @@ def main():
     print("目标 shape:", targets.shape)
     print(f"温度范围: [{targets.min():.2f}, {targets.max():.2f}] C")
 
-    output_dir = Path(args.output_dir).resolve()
+    output_dir = Path(args.output_dir).expanduser().resolve()
     save_outputs(
         output_dir,
         dat_path,
