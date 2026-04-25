@@ -1,7 +1,0 @@
-interface:
-  display_name: "Thermal Conductivity Lab"
-  short_description: "Project workflow for Thermal-90 conductivity experiments"
-  default_prompt: "Use $thermal-conductivity-lab to continue the Thermal-90 thermal conductivity experiment."
-
-policy:
-  allow_implicit_invocation: true
