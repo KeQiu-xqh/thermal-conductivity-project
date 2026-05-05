@@ -1,30 +1,34 @@
 # Bugs And Fixes
 
-更新：2026-04-17
+更新：2026-05-05
 
 ## 1. SSH 环境下 OpenCV GUI 无法显示
 
-- 现象：在普通 SSH 终端运行热像脚本时，OpenCV / Qt 报 `could not connect to display`
-- 结论：这不是采集失败，而是显示环境缺失
-- 处理：需要在 VNC 桌面终端运行，或者显式配置 `DISPLAY` / `XAUTHORITY`
+- 现象：在普通 SSH 终端运行热像脚本时，OpenCV / Qt 报 `could not connect to display`。
+- 结论：问题不是采集失败，而是显示环境缺失。
+- 处理：在 VNC 桌面终端运行需要图形界面的脚本。
 
 ## 2. `stream_spi.py` 间歇性卡在第一帧前
 
-- 现象：程序打印 `Entering continuous capture mode.` 后没有继续输出帧统计
-- 特征：失败时常伴随 `FRAME_MODE: 0x0`、`STATUS: 0x4`、`Mode : 0x0`、`CAMERA_TYPE: 0`
-- 结论：更像间歇性初始化 / 状态机异常，不是固定配置错误
-- 补充：同样命令后续又能成功运行，证明问题具有间歇性
+- 现象：程序输出 `Entering continuous capture mode.` 后没有继续出帧。
+- 结论：更像间歇性初始化或状态机异常，不是固定配置错误。
+- 处理：重试同一命令，必要时重新进入 VNC 终端后再运行。
 
-## 3. Windows 不能“直接看录像”
+## 3. Windows 不能直接播放 `.dat`
 
-- 现象：采集回来的原始文件不能像普通视频那样直接双击播放
-- 原因：原始热像记录保存的是逐帧温度矩阵，不是 `mp4/avi`
-- 结论：这不是数据无效，而是数据格式本来就不是标准视频
-- 处理：通过 [`code/view_dat.py`](/C:/Users/28146/Desktop/thermal-conductivity-project/code/view_dat.py) 生成 GIF 回看层
-- 当前结果：已能输出 `outputs/preview/<stem>_preview.gif`
+- 现象：采集回来的原始文件不能像普通视频一样直接双击播放。
+- 结论：`.dat` 保存的是逐帧温度矩阵，不是 `mp4/avi`。
+- 处理：使用 [view_dat.py](/C:/Users/28146/Desktop/thermal-conductivity-project/code/view_dat.py) 生成 GIF 与分析图。
 
 ## 4. 当前 ROI 还不是最终样品 ROI
 
-- 现象：当前训练数据已从固定矩形 ROI 构建，但该 ROI 仍是“疑似金属丝候选区域”
-- 风险：如果直接把当前 ROI 当成正式样品区域，后续反演可能混入背景或偏离真实样品位置
-- 处理：下一步先固定样品物理 ROI，再进入正式建模
+- 现象：当前训练数据已经由固定矩形 ROI 构建，但该 ROI 仍是候选区域。
+- 风险：如果直接把当前 ROI 当成正式样品区域，后续反演可能混入背景或偏离真实样品位置。
+- 处理：先固定样品物理 ROI，再进入正式建模。
+
+## 5. 原参考报告中的理想 PINN 模型不适用于真实实验
+
+- 现象：原参考报告在文字上讨论了热辐射、环境扰动和接触热阻，但真正落到 PINN 实现时仍使用理想绝热方程 `T_t = alpha T_xx`、零边界和高斯初始条件。
+- 风险：该模型与真实金属棒在空气中的散热、根部接触和红外测温机制不匹配，直接照搬会得到物理上失真的反演结果。
+- 结论：问题不在一维假设本身，而在观测模型与 PDE 过于理想化。
+- 处理：正式模型改为黑体化后的热像观测 + 含侧向散热的一维非稳态方程；边界条件改为真实根部边界，PINN 至少联合学习 `alpha` 与 `h`。

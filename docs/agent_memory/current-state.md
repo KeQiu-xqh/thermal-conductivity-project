@@ -1,43 +1,36 @@
 # Current State
 
-更新：2026-04-17
+更新：2026-05-05
 
 ## 当前主线
 
-项目当前已经进入：
-
-**真实实验数据闭环已建立，开始收敛正式样品 ROI 和训练数据格式。**
+项目当前已经从“采集链路是否能跑”阶段，进入“正式样品、正式观测模型、正式反演模型是否成立”的阶段。
 
 ## 已确认可用
 
-- 官方 `stream_spi.py` 可运行
-- [`code/thermal90_ir_temp.py`](/C:/Users/28146/Desktop/thermal-conductivity-project/code/thermal90_ir_temp.py) 可运行
-- VNC 下实时热像显示正常
-- 原始热像数据已成功采集并回传到 Windows
-- [`code/view_dat.py`](/C:/Users/28146/Desktop/thermal-conductivity-project/code/view_dat.py) 可从原始数据生成：
-  - GIF 回看
-  - 多帧对比图
-  - 中心点/中心 ROI 曲线
-  - 热区 ROI 曲线
-- [`code/construct_training_data.py`](/C:/Users/28146/Desktop/thermal-conductivity-project/code/construct_training_data.py) 可从固定矩形 ROI 构建 `npz/csv/meta.json`
+- Raspberry Pi 5 + Thermal-90 的采集链路可运行。
+- `code/thermal90_ir_temp.py` 可运行，VNC 下可做实时热像显示。
+- 原始热像 `.dat` 数据可以成功回传到 Windows。
+- `code/view_dat.py` 可以生成 GIF 预览和基础温度曲线。
+- `code/construct_training_data.py` 可以从固定 ROI 构建通用训练数据。
 
-## 当前数据状态
+## 已确认的数据现状
 
-- 当前原始数据样本：`data/raw/thermal90-20260417-run01.dat`
-- 当前可回看预览：`outputs/preview/thermal90-20260417-run01_preview.gif`
-- 当前训练数据：`data/derived/thermal90-20260417-run01_train_data.*`
-- 当前构造的 ROI 是疑似金属丝候选区域，不是最终物理定义 ROI
+- 当前已有样本：`data/raw/thermal90-20260417-run01.dat`
+- 预览文件：`outputs/preview/thermal90-20260417-run01_preview.gif`
+- 派生训练数据：`data/derived/thermal90-20260417-run01_train_data.*`
+- `data/raw/thermal90-20260424-run02.dat` 已显示出稳定高温斜带，说明当前系统具备局部热像测温稳定性验证条件。
 
-## 当前判断
+## 当前关键判断
 
-- 采集链路已经不是主要风险
-- 目前更重要的是：
-  - 固定金属丝所在 ROI
-  - 统一数据命名
-  - 将 `x, y, t -> T` 数据进一步压缩或变换为更适合 1D 导热反演的形式
+- 采集链路已经不是主要风险。
+- 当前主要风险是样品 ROI、数据格式和物理模型是否与正式反演一致。
+- 当前通用 `x, y, t -> T` 数据仍偏向热像 ROI 数据，不是正式一维导热反演数据。
 
-## 最新分析
+## 2026-05-05 模型修正
 
-- `data/raw/thermal90-20260424-run02.dat` 对应的恒温加热台附件金属丝数据中，出现了一条从左上向右下延伸的稳定高温斜带
-- 依据该斜带构造的候选 wire ROI，平均温度约在 `79°C` 左右，时间波动很小
-- 这说明当前实验已经具备做“红外摄温稳定性/准确性验证”的条件，但还不足以直接得出最终热导率
+- 已明确确认：原参考报告中的理想一维绝热 PINN 与真实实验边界条件不匹配，不能再作为正式模型。
+- 当前正式路线调整为：`黑体化处理 + 改善根部热接触 + 一维含散热项非稳态模型 + 多参数 PINN`。
+- 一维假设仍然保留，但必须把侧向散热和真实边界条件纳入。
+- 裸金属热像测温不再视为可直接定量反演的数据源。
+- 后续正式数据格式应从通用 `x, y, t -> T` 收敛为沿棒轴线或窄带平均后的 `x, t -> T`。
