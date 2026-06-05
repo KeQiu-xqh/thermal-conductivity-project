@@ -59,6 +59,18 @@ def parse_args():
     parser.add_argument("--t-inf-c", type=float, default=DEFAULT_T_INF_C)
     parser.add_argument("--alpha-init", type=float, default=DEFAULT_ALPHA_INIT)
     parser.add_argument("--h-init", type=float, default=DEFAULT_H_INIT)
+    parser.add_argument("--lr-scheduler", choices=["none", "plateau"], default="none")
+    parser.add_argument("--lr-factor", type=float, default=0.5)
+    parser.add_argument("--lr-patience", type=int, default=200)
+    parser.add_argument("--min-lr", type=float, default=1e-6)
+    parser.add_argument("--resume-checkpoint", default=None)
+    parser.add_argument("--lbfgs-steps", type=int, default=0)
+    parser.add_argument("--lbfgs-lr", type=float, default=1.0)
+    parser.add_argument("--lbfgs-history-size", type=int, default=50)
+    parser.add_argument("--lbfgs-line-search", choices=["none", "strong_wolfe"], default="strong_wolfe")
+    parser.add_argument("--early-stop-window", type=int, default=0)
+    parser.add_argument("--early-stop-loss-rel-tol", type=float, default=1e-4)
+    parser.add_argument("--early-stop-param-rel-tol", type=float, default=5e-4)
     parser.add_argument("--initial-mode", choices=["ambient", "measured"], default=DEFAULT_INITIAL_MODE)
     parser.add_argument("--measured-initial-frame-count", type=int, default=DEFAULT_MEASURED_INITIAL_FRAME_COUNT)
     parser.add_argument("--right-bc-mode", choices=["none", "robin"], default=DEFAULT_RIGHT_BC_MODE)
@@ -304,11 +316,14 @@ def compute_pde_loss(model, coords, dataset, args):
     return torch.mean(residual.pow(2))
 
 
-def compute_right_boundary_loss(model, sample_count, dataset, args, device):
+def compute_right_boundary_loss(model, sample_count, dataset, args, device, t_samples=None):
     if getattr(args, "right_bc_mode", DEFAULT_RIGHT_BC_MODE) == "none":
         return torch.zeros((), dtype=torch.float32, device=device)
 
-    t = torch.rand(sample_count, 1, device=device)
+    if t_samples is None:
+        t = torch.rand(sample_count, 1, device=device)
+    else:
+        t = t_samples.to(device=device, dtype=torch.float32)
     x = torch.ones_like(t)
     coords = torch.cat([x, t], dim=1)
     _, _, pred_c, _, temp_x_c_m, _ = compute_temperature_and_derivatives(model, coords, dataset)
@@ -321,10 +336,34 @@ def compute_right_boundary_loss(model, sample_count, dataset, args, device):
     return torch.mean(residual.pow(2))
 
 
-def train_model(model, dataset, args, device):
-    model.to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+def build_lr_scheduler(optimizer, args):
+    if getattr(args, "lr_scheduler", "none") == "none":
+        return None
+    if args.lr_scheduler == "plateau":
+        return torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            mode="min",
+            factor=float(getattr(args, "lr_factor", 0.5)),
+            patience=int(getattr(args, "lr_patience", 200)),
+            min_lr=float(getattr(args, "min_lr", 1e-6)),
+        )
+    raise ValueError(f"Unsupported lr scheduler: {args.lr_scheduler}")
 
+
+def load_checkpoint_into_model(model, checkpoint_path, device):
+    checkpoint_path = Path(checkpoint_path).expanduser().resolve()
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    if "model_state" not in checkpoint:
+        raise KeyError(f"Checkpoint lacks model_state: {checkpoint_path}")
+    model.load_state_dict(checkpoint["model_state"])
+    return {key: value for key, value in checkpoint.items() if key != "model_state"}
+
+
+def get_optimizer_lr(optimizer):
+    return float(optimizer.param_groups[0]["lr"])
+
+
+def prepare_training_context(dataset, args, device):
     coords = torch.tensor(np.column_stack([dataset["x_norm"], dataset["t_norm"]]), dtype=torch.float32, device=device)
     targets = torch.tensor(dataset["u_norm"].reshape(-1, 1), dtype=torch.float32, device=device)
     time_axis_norm = ((dataset["time_axis_sec"] - dataset["t_min"]) / dataset["t_span_s"]).astype(np.float32)
@@ -342,65 +381,164 @@ def train_model(model, dataset, args, device):
         dtype=torch.float32,
         device=device,
     )
+    return {
+        "coords": coords,
+        "targets": targets,
+        "boundary_interp": boundary_interp,
+        "x_initial": x_initial,
+        "t_zero": t_zero,
+        "initial_target": initial_target,
+    }
 
-    history = []
-    for epoch in range(args.epochs):
-        optimizer.zero_grad()
 
-        pred = model(coords)
-        data_loss = torch.mean((pred - targets).pow(2))
-
-        collocation = sample_collocation_points(
+def sample_training_loss_points(args, device):
+    boundary_count = max(64, args.collocation_points // 4)
+    return {
+        "collocation": sample_collocation_points(
             count=args.collocation_points,
             time_min=0.0,
             time_max=1.0,
             x_min=0.0,
             x_max=1.0,
             device=device,
-        )
-        pde_loss = compute_pde_loss(model, collocation, dataset, args)
+        ),
+        "t_left": torch.rand(boundary_count, 1, device=device),
+        "t_right": torch.rand(boundary_count, 1, device=device),
+    }
 
-        t_left = torch.rand(max(64, args.collocation_points // 4), 1, device=device)
-        x_left = torch.zeros_like(t_left)
-        left_target = torch.tensor(
-            boundary_interp(t_left.detach().cpu().numpy().reshape(-1)),
-            dtype=torch.float32,
-            device=device,
-        ).view(-1, 1)
-        bc_left_loss = torch.mean((model(torch.cat([x_left, t_left], dim=1)) - left_target).pow(2))
-        bc_right_loss = compute_right_boundary_loss(
-            model,
-            sample_count=max(64, args.collocation_points // 4),
-            dataset=dataset,
-            args=args,
-            device=device,
-        )
-        bc_loss = bc_left_loss + bc_right_loss
 
-        ic_pred = model(torch.cat([x_initial, t_zero], dim=1))
-        ic_loss = torch.mean((ic_pred - initial_target).pow(2))
+def compute_training_losses(model, dataset, args, device, context, loss_points=None):
+    if loss_points is None:
+        loss_points = sample_training_loss_points(args, device)
 
-        loss = (
-            args.data_weight * data_loss
-            + args.pde_weight * pde_loss
-            + args.bc_weight * bc_loss
-            + args.ic_weight * ic_loss
-        )
+    pred = model(context["coords"])
+    data_loss = torch.mean((pred - context["targets"]).pow(2))
+
+    pde_loss = compute_pde_loss(model, loss_points["collocation"], dataset, args)
+
+    t_left = loss_points["t_left"]
+    x_left = torch.zeros_like(t_left)
+    left_target = torch.tensor(
+        context["boundary_interp"](t_left.detach().cpu().numpy().reshape(-1)),
+        dtype=torch.float32,
+        device=device,
+    ).view(-1, 1)
+    bc_left_loss = torch.mean((model(torch.cat([x_left, t_left], dim=1)) - left_target).pow(2))
+    bc_right_loss = compute_right_boundary_loss(
+        model,
+        sample_count=max(64, args.collocation_points // 4),
+        dataset=dataset,
+        args=args,
+        device=device,
+        t_samples=loss_points["t_right"],
+    )
+    bc_loss = bc_left_loss + bc_right_loss
+
+    ic_pred = model(torch.cat([context["x_initial"], context["t_zero"]], dim=1))
+    ic_loss = torch.mean((ic_pred - context["initial_target"]).pow(2))
+
+    loss = (
+        args.data_weight * data_loss
+        + args.pde_weight * pde_loss
+        + args.bc_weight * bc_loss
+        + args.ic_weight * ic_loss
+    )
+    return loss, data_loss, pde_loss, bc_loss, ic_loss
+
+
+def make_history_row(step, stage, optimizer, model, losses):
+    loss, data_loss, pde_loss, bc_loss, ic_loss = losses
+    return {
+        "epoch": int(step),
+        "step": int(step),
+        "stage": stage,
+        "lr": get_optimizer_lr(optimizer),
+        "loss": float(loss.item()),
+        "data_loss": float(data_loss.item()),
+        "pde_loss": float(pde_loss.item()),
+        "bc_loss": float(bc_loss.item()),
+        "ic_loss": float(ic_loss.item()),
+        "alpha_m2_s": float(model.alpha.item()),
+        "h_w_m2k": float(model.h.item()),
+    }
+
+
+def should_stop_early(history, window, loss_rel_tol, param_rel_tol):
+    if window <= 0 or len(history) < window + 1:
+        return False
+    before = history[-window - 1]
+    current = history[-1]
+    loss_scale = max(abs(before["loss"]), 1e-12)
+    alpha_scale = max(abs(before["alpha_m2_s"]), 1e-12)
+    h_scale = max(abs(before["h_w_m2k"]), 1e-12)
+    loss_rel_change = abs(before["loss"] - current["loss"]) / loss_scale
+    alpha_rel_change = abs(before["alpha_m2_s"] - current["alpha_m2_s"]) / alpha_scale
+    h_rel_change = abs(before["h_w_m2k"] - current["h_w_m2k"]) / h_scale
+    return (
+        loss_rel_change <= loss_rel_tol
+        and alpha_rel_change <= param_rel_tol
+        and h_rel_change <= param_rel_tol
+    )
+
+
+def train_model(model, dataset, args, device):
+    model.to(device)
+    context = prepare_training_context(dataset, args, device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    scheduler = build_lr_scheduler(optimizer, args)
+    history = []
+
+    for epoch in range(args.epochs):
+        optimizer.zero_grad()
+        losses = compute_training_losses(model, dataset, args, device, context)
+        loss = losses[0]
         loss.backward()
         optimizer.step()
+        if scheduler is not None:
+            scheduler.step(float(loss.item()))
 
-        history.append(
-            {
-                "epoch": epoch,
-                "loss": float(loss.item()),
-                "data_loss": float(data_loss.item()),
-                "pde_loss": float(pde_loss.item()),
-                "bc_loss": float(bc_loss.item()),
-                "ic_loss": float(ic_loss.item()),
-                "alpha_m2_s": float(model.alpha.item()),
-                "h_w_m2k": float(model.h.item()),
-            }
+        history.append(make_history_row(epoch, "adam", optimizer, model, losses))
+        if should_stop_early(
+            history,
+            window=int(getattr(args, "early_stop_window", 0)),
+            loss_rel_tol=float(getattr(args, "early_stop_loss_rel_tol", 1e-4)),
+            param_rel_tol=float(getattr(args, "early_stop_param_rel_tol", 5e-4)),
+        ):
+            history[-1]["early_stop"] = True
+            break
+
+    lbfgs_steps = max(0, int(getattr(args, "lbfgs_steps", 0)))
+    if lbfgs_steps > 0:
+        line_search = None if getattr(args, "lbfgs_line_search", "strong_wolfe") == "none" else "strong_wolfe"
+        lbfgs_optimizer = torch.optim.LBFGS(
+            model.parameters(),
+            lr=float(getattr(args, "lbfgs_lr", 1.0)),
+            max_iter=1,
+            history_size=int(getattr(args, "lbfgs_history_size", 50)),
+            line_search_fn=line_search,
         )
+        for lbfgs_step in range(lbfgs_steps):
+            loss_points = sample_training_loss_points(args, device)
+
+            def closure():
+                lbfgs_optimizer.zero_grad()
+                losses = compute_training_losses(model, dataset, args, device, context, loss_points=loss_points)
+                losses[0].backward()
+                return losses[0]
+
+            lbfgs_optimizer.step(closure)
+            with torch.enable_grad():
+                captured_losses = compute_training_losses(model, dataset, args, device, context, loss_points=loss_points)
+            step = len(history)
+            history.append(make_history_row(step, "lbfgs", lbfgs_optimizer, model, captured_losses))
+            if should_stop_early(
+                history,
+                window=int(getattr(args, "early_stop_window", 0)),
+                loss_rel_tol=float(getattr(args, "early_stop_loss_rel_tol", 1e-4)),
+                param_rel_tol=float(getattr(args, "early_stop_param_rel_tol", 5e-4)),
+            ):
+                history[-1]["early_stop"] = True
+                break
 
     return history
 
@@ -425,14 +563,35 @@ def save_training_outputs(model, dataset, history, args, output_stem, device):
     alpha_m2_s = float(model.alpha.item())
     h_w_m2k = float(model.h.item())
     conductivity = convert_alpha_to_conductivity(alpha_m2_s, args.rho, args.cp)
+    stage_counts = {}
+    for row in history:
+        stage = row.get("stage", "unknown")
+        stage_counts[stage] = stage_counts.get(stage, 0) + 1
 
-    torch.save({"model_state": model.state_dict(), "args": vars(args)}, model_path)
+    torch.save(
+        {
+            "model_state": model.state_dict(),
+            "args": vars(args),
+            "model_config": {
+                "hidden_width": int(args.hidden_width),
+                "hidden_depth": int(args.hidden_depth),
+                "alpha_init": float(args.alpha_init),
+                "h_init": float(args.h_init),
+            },
+            "final_alpha_m2_s": alpha_m2_s,
+            "final_h_w_m2k": h_w_m2k,
+            "final_thermal_conductivity_w_mk": conductivity,
+        },
+        model_path,
+    )
     with open(history_path, "w", encoding="utf-8") as handle:
         json.dump(history, handle, ensure_ascii=False, indent=2)
 
     summary = {
         "dataset_path": str(Path(args.dataset_path).resolve()),
         "epochs": args.epochs,
+        "completed_steps": len(history),
+        "stage_counts": stage_counts,
         "temperature_mse_c2": mse_c,
         "output_stem": output_stem,
         "mm_per_px": dataset["mm_per_px"],
@@ -449,6 +608,20 @@ def save_training_outputs(model, dataset, history, args, output_stem, device):
         "initial_mode": args.initial_mode,
         "measured_initial_frame_count": int(args.measured_initial_frame_count),
         "right_bc_mode": args.right_bc_mode,
+        "optimizer": {
+            "adam_lr": float(args.lr),
+            "lr_scheduler": args.lr_scheduler,
+            "lr_factor": float(args.lr_factor),
+            "lr_patience": int(args.lr_patience),
+            "min_lr": float(args.min_lr),
+            "lbfgs_steps": int(args.lbfgs_steps),
+            "lbfgs_lr": float(args.lbfgs_lr),
+            "lbfgs_history_size": int(args.lbfgs_history_size),
+            "lbfgs_line_search": args.lbfgs_line_search,
+            "final_lr": float(history[-1]["lr"]) if history else float(args.lr),
+        },
+        "resume_checkpoint": str(Path(args.resume_checkpoint).resolve()) if args.resume_checkpoint else None,
+        "early_stop": bool(history[-1].get("early_stop", False)) if history else False,
         "equation_used": "T_t = alpha*T_xx - 4h/(rho*cp*D)*(T-T_inf) - 4*epsilon*sigma/(rho*cp*D)*(T^4-T_inf^4)",
         "boundary_used": (
             "left Dirichlet from first rod column after support; "
@@ -465,11 +638,12 @@ def save_training_outputs(model, dataset, history, args, output_stem, device):
         json.dump(summary, handle, ensure_ascii=False, indent=2)
 
     plt.figure(figsize=(8, 5))
-    plt.plot([row["loss"] for row in history], label="total loss")
-    plt.plot([row["data_loss"] for row in history], label="data")
-    plt.plot([row["pde_loss"] for row in history], label="pde")
+    steps = [row.get("step", idx) for idx, row in enumerate(history)]
+    plt.plot(steps, [row["loss"] for row in history], label="total loss")
+    plt.plot(steps, [row["data_loss"] for row in history], label="data")
+    plt.plot(steps, [row["pde_loss"] for row in history], label="pde")
     plt.yscale("log")
-    plt.xlabel("Epoch")
+    plt.xlabel("Optimizer Step")
     plt.ylabel("Loss")
     plt.title("PINN Loss Curves")
     plt.grid(True)
@@ -479,9 +653,9 @@ def save_training_outputs(model, dataset, history, args, output_stem, device):
     plt.close()
 
     plt.figure(figsize=(8, 5))
-    plt.plot([row["alpha_m2_s"] for row in history], label="alpha (m^2/s)")
-    plt.plot([row["h_w_m2k"] for row in history], label="h (W/m^2/K)")
-    plt.xlabel("Epoch")
+    plt.plot(steps, [row["alpha_m2_s"] for row in history], label="alpha (m^2/s)")
+    plt.plot(steps, [row["h_w_m2k"] for row in history], label="h (W/m^2/K)")
+    plt.xlabel("Optimizer Step")
     plt.ylabel("Parameter Value")
     plt.title("Learned Physical Parameters")
     plt.grid(True)
@@ -530,6 +704,11 @@ def main():
         alpha_init=args.alpha_init,
         h_init=args.h_init,
     )
+    if args.resume_checkpoint:
+        checkpoint_metadata = load_checkpoint_into_model(model, args.resume_checkpoint, device)
+        print("loaded checkpoint:", Path(args.resume_checkpoint).expanduser().resolve())
+        if checkpoint_metadata.get("model_config"):
+            print("checkpoint model_config:", checkpoint_metadata["model_config"])
 
     if args.skip_train:
         print("skip_train=True，仅完成数据加载与模型初始化。")

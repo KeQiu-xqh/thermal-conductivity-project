@@ -12,16 +12,19 @@ if str(CODE_DIR) not in sys.path:
     sys.path.insert(0, str(CODE_DIR))
 
 from train_pinn_1d import (  # type: ignore
+    build_lr_scheduler,
     build_initial_profile_target,
     build_boundary_interpolator,
     compute_right_boundary_loss,
     convert_alpha_to_conductivity,
     estimate_mm_per_px,
+    load_checkpoint_into_model,
     load_xt_dataset,
     normalize_dataset,
     pde_residual_physical,
     sample_collocation_points,
     SimplePINN,
+    train_model,
 )
 
 
@@ -202,6 +205,172 @@ class ConstraintModeTests(unittest.TestCase):
 
         loss = compute_right_boundary_loss(model, sample_count=8, dataset=dataset, args=Args(), device=torch.device("cpu"))
         self.assertEqual(float(loss.item()), 0.0)
+
+
+class TrainingControlTests(unittest.TestCase):
+    def test_plateau_scheduler_reduces_learning_rate_after_stalled_metric(self):
+        import torch
+
+        class Args:
+            lr_scheduler = "plateau"
+            lr_factor = 0.5
+            lr_patience = 0
+            min_lr = 1.0e-5
+
+        model = SimplePINN(hidden_width=8, hidden_depth=2)
+        optimizer = torch.optim.Adam(model.parameters(), lr=1.0e-3)
+
+        scheduler = build_lr_scheduler(optimizer, Args())
+        self.assertIsNotNone(scheduler)
+        scheduler.step(1.0)
+        scheduler.step(1.0)
+
+        self.assertAlmostEqual(optimizer.param_groups[0]["lr"], 5.0e-4)
+
+    def test_checkpoint_loader_restores_model_state(self):
+        import torch
+
+        source = SimplePINN(hidden_width=8, hidden_depth=2)
+        with torch.no_grad():
+            source.alpha_raw.fill_(0.25)
+            source.h_raw.fill_(0.5)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            checkpoint = Path(tmp_dir) / "pinn.pt"
+            torch.save({"model_state": source.state_dict(), "args": {"hidden_width": 8}}, checkpoint)
+
+            target = SimplePINN(hidden_width=8, hidden_depth=2)
+            metadata = load_checkpoint_into_model(target, checkpoint, torch.device("cpu"))
+
+        self.assertEqual(metadata["args"]["hidden_width"], 8)
+        self.assertTrue(torch.allclose(target.alpha_raw, source.alpha_raw))
+        self.assertTrue(torch.allclose(target.h_raw, source.h_raw))
+
+    def test_training_history_records_stage_and_learning_rate(self):
+        class Args:
+            visible_length_mm = 136.0
+            diameter_mm = 8.0
+            calibration_mode = "diameter"
+            mm_per_px = None
+            t_inf_c = 25.0
+            rho = 2700.0
+            cp = 900.0
+            emissivity = 0.95
+            sigma_sb = 5.67e-8
+            right_bc_mode = "none"
+            initial_mode = "measured"
+            measured_initial_frame_count = 1
+            lr = 1.0e-3
+            epochs = 2
+            collocation_points = 8
+            data_weight = 1.0
+            pde_weight = 0.1
+            bc_weight = 0.1
+            ic_weight = 0.1
+            lr_scheduler = "none"
+            lr_factor = 0.5
+            lr_patience = 0
+            min_lr = 1.0e-6
+            lbfgs_steps = 0
+
+        xt_grid = np.array(
+            [
+                [30.0, 29.0, 28.0],
+                [31.0, 30.0, 29.0],
+            ],
+            dtype=np.float32,
+        )
+        dataset = normalize_dataset(
+            {
+                "xt_grid_c": xt_grid,
+                "inputs_xt": np.array(
+                    [[0.0, 0.0], [1.0, 0.0], [2.0, 0.0], [0.0, 1.0], [1.0, 1.0], [2.0, 1.0]],
+                    dtype=np.float32,
+                ),
+                "temperature_c": xt_grid.reshape(-1, 1),
+                "time_axis_sec": np.array([0.0, 1.0], dtype=np.float32),
+                "x_axis_heat_px": np.array([0.0, 1.0, 2.0], dtype=np.float32),
+                "boundary_temperature_c": np.array([30.0, 31.0], dtype=np.float32),
+                "far_end_temperature_c": np.array([28.0, 29.0], dtype=np.float32),
+                "x_axis_mm": np.array([0.0, 2.0, 4.0], dtype=np.float32),
+            },
+            Args(),
+        )
+        model = SimplePINN(hidden_width=8, hidden_depth=2)
+
+        import torch
+
+        history = train_model(model, dataset, Args(), torch.device("cpu"))
+
+        self.assertEqual(len(history), 2)
+        self.assertEqual(history[0]["stage"], "adam")
+        self.assertEqual(history[0]["step"], 0)
+        self.assertIn("lr", history[0])
+
+    def test_lbfgs_stage_appends_history_rows_after_adam(self):
+        class Args:
+            visible_length_mm = 136.0
+            diameter_mm = 8.0
+            calibration_mode = "diameter"
+            mm_per_px = None
+            t_inf_c = 25.0
+            rho = 2700.0
+            cp = 900.0
+            emissivity = 0.95
+            sigma_sb = 5.67e-8
+            right_bc_mode = "none"
+            initial_mode = "measured"
+            measured_initial_frame_count = 1
+            lr = 1.0e-3
+            epochs = 1
+            collocation_points = 8
+            data_weight = 1.0
+            pde_weight = 0.1
+            bc_weight = 0.1
+            ic_weight = 0.1
+            lr_scheduler = "none"
+            lr_factor = 0.5
+            lr_patience = 0
+            min_lr = 1.0e-6
+            lbfgs_steps = 1
+            lbfgs_lr = 0.1
+            lbfgs_history_size = 5
+            lbfgs_line_search = "none"
+            early_stop_window = 0
+            early_stop_loss_rel_tol = 1.0e-4
+            early_stop_param_rel_tol = 5.0e-4
+
+        xt_grid = np.array(
+            [
+                [30.0, 29.0, 28.0],
+                [31.0, 30.0, 29.0],
+            ],
+            dtype=np.float32,
+        )
+        dataset = normalize_dataset(
+            {
+                "xt_grid_c": xt_grid,
+                "inputs_xt": np.array(
+                    [[0.0, 0.0], [1.0, 0.0], [2.0, 0.0], [0.0, 1.0], [1.0, 1.0], [2.0, 1.0]],
+                    dtype=np.float32,
+                ),
+                "temperature_c": xt_grid.reshape(-1, 1),
+                "time_axis_sec": np.array([0.0, 1.0], dtype=np.float32),
+                "x_axis_heat_px": np.array([0.0, 1.0, 2.0], dtype=np.float32),
+                "boundary_temperature_c": np.array([30.0, 31.0], dtype=np.float32),
+                "far_end_temperature_c": np.array([28.0, 29.0], dtype=np.float32),
+                "x_axis_mm": np.array([0.0, 2.0, 4.0], dtype=np.float32),
+            },
+            Args(),
+        )
+        model = SimplePINN(hidden_width=8, hidden_depth=2)
+
+        import torch
+
+        history = train_model(model, dataset, Args(), torch.device("cpu"))
+
+        self.assertEqual([row["stage"] for row in history], ["adam", "lbfgs"])
+        self.assertEqual([row["step"] for row in history], [0, 1])
 
 
 if __name__ == "__main__":
