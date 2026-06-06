@@ -44,6 +44,7 @@ DEFAULT_DATA_WEIGHTING = "none"
 DEFAULT_DATA_WEIGHTING_LAMBDA = 1.0
 DEFAULT_DATA_WEIGHTING_TEMP_SCALE_C = 10.0
 DEFAULT_DATA_WEIGHTING_MAX_EXTRA = 4.0
+DEFAULT_TRAINING_PRESET = "none"
 
 
 def parse_args():
@@ -87,6 +88,7 @@ def parse_args():
     parser.add_argument("--data-weighting-lambda", type=float, default=DEFAULT_DATA_WEIGHTING_LAMBDA)
     parser.add_argument("--data-weighting-temp-scale-c", type=float, default=DEFAULT_DATA_WEIGHTING_TEMP_SCALE_C)
     parser.add_argument("--data-weighting-max-extra", type=float, default=DEFAULT_DATA_WEIGHTING_MAX_EXTRA)
+    parser.add_argument("--training-preset", choices=["none", "stable", "experimental"], default=DEFAULT_TRAINING_PRESET)
     parser.add_argument("--initial-mode", choices=["ambient", "measured"], default=DEFAULT_INITIAL_MODE)
     parser.add_argument("--measured-initial-frame-count", type=int, default=DEFAULT_MEASURED_INITIAL_FRAME_COUNT)
     parser.add_argument("--right-bc-mode", choices=["none", "robin"], default=DEFAULT_RIGHT_BC_MODE)
@@ -100,7 +102,24 @@ def parse_args():
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
     parser.add_argument("--output-stem", default=None)
     parser.add_argument("--skip-train", action="store_true")
-    return parser.parse_args()
+    return apply_training_preset(parser.parse_args())
+
+
+def apply_training_preset(args):
+    preset = getattr(args, "training_preset", DEFAULT_TRAINING_PRESET)
+    if preset == "none":
+        return args
+    if preset == "stable":
+        args.data_batch_size = 16384
+        args.pde_sampling = "uniform"
+        args.data_weighting = "none"
+        return args
+    if preset == "experimental":
+        args.data_batch_size = 16384
+        args.pde_sampling = "mixed"
+        args.data_weighting = "delta-initial"
+        return args
+    raise ValueError(f"Unsupported training preset: {preset}")
 
 
 def choose_device(device_arg):
@@ -716,6 +735,7 @@ def save_training_outputs(model, dataset, history, args, output_stem, device):
         "initial_mode": args.initial_mode,
         "measured_initial_frame_count": int(args.measured_initial_frame_count),
         "right_bc_mode": args.right_bc_mode,
+        "training_preset": getattr(args, "training_preset", DEFAULT_TRAINING_PRESET),
         "data_batch_size": int(args.data_batch_size),
         "pde_sampling": args.pde_sampling,
         "pde_hot_x_max": float(args.pde_hot_x_max),

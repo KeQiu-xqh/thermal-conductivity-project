@@ -273,3 +273,21 @@
   - `h = 10.48 W/m^2/K`
   - `full_temperature_mse_c2 = 0.09758`
 - Current interpretation: optimized new-PINN training pulls this H59 batch down to about `71 W/(m*K)`, while full MSE is almost unchanged. Legacy objective still reproduces about `95 W/(m*K)`. Treat `71 W/(m*K)` as a sampling/weighting-objective result, not a replacement H59 main conclusion, until multi-seed and ROI sensitivity checks are done.
+
+## 2026-06-07 PINN objective ablation follow-up
+
+- Same H59@100 C ROI `x=12~56, y=30~34` was rerun with one-factor training ablations:
+  - legacy objective, full data, uniform PDE, no weighting: `k = 94.60 W/(m*K)`, `MSE = 0.09758`
+  - large data mini-batch only, `--data-batch-size 16384`: `k = 93.38 W/(m*K)`, `MSE = 0.09627`
+  - mixed PDE only: `k = 79.05 W/(m*K)`, `MSE = 0.09566`
+  - delta-initial data weighting only: `k = 74.53 W/(m*K)`, `MSE = 0.09783`
+  - mini-batch + mixed PDE, no weighting: `k = 79.52 W/(m*K)`, `MSE = 0.09545`
+  - mini-batch + mixed PDE + weighting + LBFGS: `k = 71.10 W/(m*K)`, `MSE = 0.09794`
+- Current interpretation:
+  - `94.60` came from the new code with the legacy objective settings, not from checking out old source code.
+  - The large data mini-batch is safe on this batch because it stays close to the legacy `94~95 W/(m*K)` result.
+  - Mixed PDE sampling and delta-initial data weighting both pull `k` low while the full unweighted MSE stays almost unchanged, so they are not reliable formal defaults for this H59 batch.
+- Code now exposes `--training-preset stable` and `--training-preset experimental`:
+  - `stable`: `data_batch_size=16384`, `pde_sampling=uniform`, `data_weighting=none`
+  - `experimental`: `data_batch_size=16384`, `pde_sampling=mixed`, `data_weighting=delta-initial`
+- Current formal recommendation: use `--training-preset stable` for routine reruns; keep `experimental` only for diagnostics or controlled sensitivity studies.

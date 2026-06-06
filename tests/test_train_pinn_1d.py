@@ -14,6 +14,7 @@ if str(CODE_DIR) not in sys.path:
 import train_pinn_1d  # type: ignore
 from train_pinn_1d import (  # type: ignore
     SimplePINN,
+    apply_training_preset,
     compute_training_losses,
     normalize_dataset,
     prepare_training_context,
@@ -61,6 +62,7 @@ class BaseArgs:
     data_weighting_lambda = 1.0
     data_weighting_temp_scale_c = 10.0
     data_weighting_max_extra = 4.0
+    training_preset = "none"
 
 
 def make_dataset(args=BaseArgs):
@@ -150,6 +152,28 @@ class SamplingControlTests(unittest.TestCase):
         self.assertTrue(torch.all(collocation[:70, 0] <= 1.0))
         self.assertTrue(torch.all(collocation[70:90, 0] <= 0.2))
         self.assertTrue(torch.all(collocation[90:, 1] <= 0.3))
+
+
+class TrainingPresetTests(unittest.TestCase):
+    def test_stable_preset_enables_only_large_data_minibatch(self):
+        class Args(BaseArgs):
+            training_preset = "stable"
+
+        args = apply_training_preset(Args())
+
+        self.assertEqual(args.data_batch_size, 16384)
+        self.assertEqual(args.pde_sampling, "uniform")
+        self.assertEqual(args.data_weighting, "none")
+
+    def test_experimental_preset_keeps_mixed_sampling_and_data_weighting(self):
+        class Args(BaseArgs):
+            training_preset = "experimental"
+
+        args = apply_training_preset(Args())
+
+        self.assertEqual(args.data_batch_size, 16384)
+        self.assertEqual(args.pde_sampling, "mixed")
+        self.assertEqual(args.data_weighting, "delta-initial")
 
 
 class DataWeightingTests(unittest.TestCase):

@@ -30,14 +30,12 @@
    - 左端至少从 `x_min≈12` 后开始
    - 第二支架若在原始热像 `x≈62`，右端建议先裁到 `x_max≈56`
    - 最好再做一组无新增支架或支架更远离 ROI 的复现实验，用来区分材料结果与支架二维影响
-12. 后续正式 PINN 反演不要再只跑短 Adam 轮数。推荐先用 Adam 长训练并记录 scheduler，再接 LBFGS 微调：
-   - Adam + scheduler + LBFGS：
-     `python code\train_pinn_1d.py data\derived\20260605_h59_100c_160328_x12_56_calib99mm\2000.0.0.000000--20260605-160328_rod_xt_data.npz --epochs 2000 --lr-scheduler plateau --lr-patience 200 --lr-factor 0.5 --min-lr 1e-5 --lbfgs-steps 300 --lbfgs-lr 0.5 --rho 8500 --cp 380 --diameter-mm 8 --t-inf-c 24.5 --output-stem 20260605_h59_100c_160328_x12_56_optimized`
-   - 从已有 2000-step checkpoint 只做第二阶段：
-     `python code\train_pinn_1d.py data\derived\20260605_h59_100c_160328_x12_56_calib99mm\2000.0.0.000000--20260605-160328_rod_xt_data.npz --epochs 0 --resume-checkpoint outputs\models\20260605_h59_100c_160328_x12_56_calib99mm_e2000_pinn.pt --lbfgs-steps 300 --lbfgs-lr 0.5 --rho 8500 --cp 380 --diameter-mm 8 --t-inf-c 24.5 --output-stem 20260605_h59_100c_160328_x12_56_lbfgs_from_e2000`
+12. 后续正式 PINN 反演不要再只跑短 Adam 轮数。当前正式训练入口先用 `--training-preset stable`，它只启用大 data mini-batch，保持 uniform PDE 和未加权 data loss：
+   - 稳定版正式命令：
+     `python code\train_pinn_1d.py data\derived\20260605_h59_100c_160328_x12_56_calib99mm\2000.0.0.000000--20260605-160328_rod_xt_data.npz --epochs 2000 --training-preset stable --rho 8500 --cp 380 --diameter-mm 8 --t-inf-c 24.5 --output-stem 20260605_h59_100c_160328_x12_56_stable`
    - 判断是否收敛时优先看 `_history.json` 的 `stage/lr/loss/alpha_m2_s/h_w_m2k`，不要只看最终热导率。
-13. 下一步正式评估 PINN 优化版时，优先在同一 ROI 上做旧/新训练对照：
-   - 旧基线：保留默认 `--data-batch-size 0 --pde-sampling uniform --data-weighting none`
-   - 新方案：加入 `--data-batch-size 16384 --pde-sampling mixed --data-weighting delta-initial`
-   - 两边都记录 `alpha/h/k`、`full_temperature_mse_c2`、`final_unweighted_data_loss` 和 `_history.json` 中参数收敛情况。
-   - 不要只用短 smoke 的 `k` 判断优化效果；短 smoke 只用于确认代码路径和 summary 字段。
+13. `--training-preset experimental` 目前只作为诊断选项，不作为正式默认：
+   - 它会启用 `--pde-sampling mixed` 和 `--data-weighting delta-initial`。
+   - H59@100 C 主 ROI 消融显示 mixed PDE 会把 `k` 拉到约 `79 W/(m*K)`，delta-initial weighting 会拉到约 `75 W/(m*K)`，二者叠加并接 LBFGS 后约 `71 W/(m*K)`。
+   - 这些结果的全量未加权 MSE 与旧目标函数几乎相同，说明 MSE 不能单独判断物理反演是否更可信。
+14. 下一步若继续提高 PINN 可信度，优先做 `--training-preset stable` 下的多 seed、ROI 和 `mm_per_px` 敏感性矩阵，而不是继续加重热前沿权重或改变 PDE 配点分布。
