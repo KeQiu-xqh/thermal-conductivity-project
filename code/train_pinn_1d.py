@@ -45,6 +45,12 @@ DEFAULT_DATA_WEIGHTING_LAMBDA = 1.0
 DEFAULT_DATA_WEIGHTING_TEMP_SCALE_C = 10.0
 DEFAULT_DATA_WEIGHTING_MAX_EXTRA = 4.0
 DEFAULT_TRAINING_PRESET = "none"
+DEFAULT_MATERIAL_PRESET = "custom"
+MATERIAL_PRESETS = {
+    "6061": {"rho": 2700.0, "cp": 900.0, "expected_k_min": 130.0, "expected_k_max": 190.0},
+    "304": {"rho": 7930.0, "cp": 500.0, "expected_k_min": 10.0, "expected_k_max": 25.0},
+    "h59": {"rho": 8500.0, "cp": 380.0, "expected_k_min": 80.0, "expected_k_max": 120.0},
+}
 
 
 def parse_args():
@@ -61,6 +67,9 @@ def parse_args():
     parser.add_argument("--ic-weight", type=float, default=DEFAULT_IC_WEIGHT)
     parser.add_argument("--rho", type=float, default=DEFAULT_RHO)
     parser.add_argument("--cp", type=float, default=DEFAULT_CP)
+    parser.add_argument("--material-preset", choices=["custom", "6061", "304", "h59"], default=DEFAULT_MATERIAL_PRESET)
+    parser.add_argument("--expected-k-min", type=float, default=None)
+    parser.add_argument("--expected-k-max", type=float, default=None)
     parser.add_argument("--diameter-mm", type=float, default=DEFAULT_DIAMETER_MM)
     parser.add_argument("--visible-length-mm", type=float, default=DEFAULT_VISIBLE_LENGTH_MM)
     parser.add_argument("--emissivity", type=float, default=DEFAULT_EMISSIVITY)
@@ -89,6 +98,10 @@ def parse_args():
     parser.add_argument("--data-weighting-temp-scale-c", type=float, default=DEFAULT_DATA_WEIGHTING_TEMP_SCALE_C)
     parser.add_argument("--data-weighting-max-extra", type=float, default=DEFAULT_DATA_WEIGHTING_MAX_EXTRA)
     parser.add_argument("--training-preset", choices=["none", "stable", "experimental"], default=DEFAULT_TRAINING_PRESET)
+    parser.add_argument("--convergence-tail-steps", type=int, default=300)
+    parser.add_argument("--min-quality-steps", type=int, default=1000)
+    parser.add_argument("--max-alpha-tail-rel-range", type=float, default=0.05)
+    parser.add_argument("--max-h-tail-rel-range", type=float, default=0.05)
     parser.add_argument("--initial-mode", choices=["ambient", "measured"], default=DEFAULT_INITIAL_MODE)
     parser.add_argument("--measured-initial-frame-count", type=int, default=DEFAULT_MEASURED_INITIAL_FRAME_COUNT)
     parser.add_argument("--right-bc-mode", choices=["none", "robin"], default=DEFAULT_RIGHT_BC_MODE)
@@ -102,7 +115,25 @@ def parse_args():
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
     parser.add_argument("--output-stem", default=None)
     parser.add_argument("--skip-train", action="store_true")
-    return apply_training_preset(parser.parse_args())
+    args = parser.parse_args()
+    args = apply_material_preset(args)
+    return apply_training_preset(args)
+
+
+def apply_material_preset(args):
+    preset = getattr(args, "material_preset", DEFAULT_MATERIAL_PRESET)
+    if preset == "custom":
+        return args
+    if preset not in MATERIAL_PRESETS:
+        raise ValueError(f"Unsupported material preset: {preset}")
+    config = MATERIAL_PRESETS[preset]
+    args.rho = config["rho"]
+    args.cp = config["cp"]
+    if getattr(args, "expected_k_min", None) is None:
+        args.expected_k_min = config["expected_k_min"]
+    if getattr(args, "expected_k_max", None) is None:
+        args.expected_k_max = config["expected_k_max"]
+    return args
 
 
 def apply_training_preset(args):
@@ -120,6 +151,75 @@ def apply_training_preset(args):
         args.data_weighting = "delta-initial"
         return args
     raise ValueError(f"Unsupported training preset: {preset}")
+
+
+def tail_relative_range(history, key, tail_steps):
+    values = [float(row[key]) for row in history[-tail_steps:] if key in row and row[key] is not None]
+    if not values:
+        return None
+    denominator = max(abs(values[-1]), 1.0e-12)
+    return float((max(values) - min(values)) / denominator)
+
+
+def build_quality_checks(history, summary, args):
+    completed_steps = int(summary.get("completed_steps", len(history)))
+    tail_steps = max(1, int(getattr(args, "convergence_tail_steps", 300)))
+    min_quality_steps = max(0, int(getattr(args, "min_quality_steps", 1000)))
+    max_alpha_range = float(getattr(args, "max_alpha_tail_rel_range", 0.05))
+    max_h_range = float(getattr(args, "max_h_tail_rel_range", 0.05))
+
+    alpha_tail_rel_range = tail_relative_range(history, "alpha_m2_s", tail_steps)
+    h_tail_rel_range = tail_relative_range(history, "h_w_m2k", tail_steps)
+    enough_steps = completed_steps >= min_quality_steps
+    parameters_stable = (
+        alpha_tail_rel_range is not None
+        and h_tail_rel_range is not None
+        and alpha_tail_rel_range <= max_alpha_range
+        and h_tail_rel_range <= max_h_range
+    )
+
+    expected_k_min = getattr(args, "expected_k_min", None)
+    expected_k_max = getattr(args, "expected_k_max", None)
+    conductivity = summary.get("thermal_conductivity_w_mk")
+    expected_k_in_range = None
+    if expected_k_min is not None and expected_k_max is not None and conductivity is not None:
+        expected_k_in_range = float(expected_k_min) <= float(conductivity) <= float(expected_k_max)
+
+    warnings = []
+    if not enough_steps:
+        warnings.append("completed_steps_below_min_quality_steps")
+    if not parameters_stable:
+        warnings.append("tail_parameters_not_stable")
+    if expected_k_in_range is False:
+        warnings.append("thermal_conductivity_outside_expected_material_range")
+    if getattr(args, "training_preset", DEFAULT_TRAINING_PRESET) == "experimental":
+        warnings.append("experimental_training_preset_not_for_formal_reporting")
+
+    if expected_k_in_range is None:
+        recommended = enough_steps and parameters_stable and getattr(args, "training_preset", DEFAULT_TRAINING_PRESET) != "experimental"
+    else:
+        recommended = (
+            enough_steps
+            and parameters_stable
+            and expected_k_in_range
+            and getattr(args, "training_preset", DEFAULT_TRAINING_PRESET) != "experimental"
+        )
+
+    return {
+        "recommended_for_reporting": bool(recommended),
+        "warnings": warnings,
+        "enough_steps": bool(enough_steps),
+        "parameters_stable": bool(parameters_stable),
+        "tail_steps": tail_steps,
+        "min_quality_steps": min_quality_steps,
+        "alpha_tail_rel_range": alpha_tail_rel_range,
+        "h_tail_rel_range": h_tail_rel_range,
+        "max_alpha_tail_rel_range": max_alpha_range,
+        "max_h_tail_rel_range": max_h_range,
+        "expected_k_min": None if expected_k_min is None else float(expected_k_min),
+        "expected_k_max": None if expected_k_max is None else float(expected_k_max),
+        "expected_k_in_range": expected_k_in_range,
+    }
 
 
 def choose_device(device_arg):
@@ -726,6 +826,9 @@ def save_training_outputs(model, dataset, history, args, output_stem, device):
         "alpha_m2_s": alpha_m2_s,
         "h_w_m2k": h_w_m2k,
         "thermal_conductivity_w_mk": conductivity,
+        "material_preset": getattr(args, "material_preset", DEFAULT_MATERIAL_PRESET),
+        "expected_k_min": None if getattr(args, "expected_k_min", None) is None else float(args.expected_k_min),
+        "expected_k_max": None if getattr(args, "expected_k_max", None) is None else float(args.expected_k_max),
         "rho_kg_m3": float(args.rho),
         "cp_j_kgk": float(args.cp),
         "diameter_m": float(args.diameter_mm * 1e-3),
@@ -772,6 +875,9 @@ def save_training_outputs(model, dataset, history, args, output_stem, device):
         ),
         "loss_model_note": "显式考虑轴向导热、侧向对流与辐射；辐射项按 Kelvin 计算。可见右边界不是物理末端时可关闭右端边界损失。",
     }
+    summary["quality_checks"] = build_quality_checks(history, summary, args)
+    if summary["quality_checks"]["warnings"]:
+        print("结果质量警告:", "; ".join(summary["quality_checks"]["warnings"]))
     with open(result_path, "w", encoding="utf-8") as handle:
         json.dump(summary, handle, ensure_ascii=False, indent=2)
 

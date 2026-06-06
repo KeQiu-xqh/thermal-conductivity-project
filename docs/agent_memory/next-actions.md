@@ -32,10 +32,11 @@
    - 最好再做一组无新增支架或支架更远离 ROI 的复现实验，用来区分材料结果与支架二维影响
 12. 后续正式 PINN 反演不要再只跑短 Adam 轮数。当前正式训练入口先用 `--training-preset stable`，它只启用大 data mini-batch，保持 uniform PDE 和未加权 data loss：
    - 稳定版正式命令：
-     `python code\train_pinn_1d.py data\derived\20260605_h59_100c_160328_x12_56_calib99mm\2000.0.0.000000--20260605-160328_rod_xt_data.npz --epochs 2000 --training-preset stable --rho 8500 --cp 380 --diameter-mm 8 --t-inf-c 24.5 --output-stem 20260605_h59_100c_160328_x12_56_stable`
-   - 判断是否收敛时优先看 `_history.json` 的 `stage/lr/loss/alpha_m2_s/h_w_m2k`，不要只看最终热导率。
+     `python code\train_pinn_1d.py data\derived\20260605_h59_100c_160328_x12_56_calib99mm\2000.0.0.000000--20260605-160328_rod_xt_data.npz --epochs 2000 --training-preset stable --material-preset h59 --diameter-mm 8 --t-inf-c 24.5 --output-stem 20260605_h59_100c_160328_x12_56_stable`
+   - 判断是否可采信时先看 summary 的 `quality_checks.recommended_for_reporting`；若为 `false`，不要把最终 `k` 当正式热导率。
+   - 若被拒绝，按 warning 类型处理：步数不足就延长训练，末段参数不稳就继续训练/接 LBFGS，材料范围外就优先检查 ROI、标定、材料 preset 和训练目标函数。
 13. `--training-preset experimental` 目前只作为诊断选项，不作为正式默认：
    - 它会启用 `--pde-sampling mixed` 和 `--data-weighting delta-initial`。
    - H59@100 C 主 ROI 消融显示 mixed PDE 会把 `k` 拉到约 `79 W/(m*K)`，delta-initial weighting 会拉到约 `75 W/(m*K)`，二者叠加并接 LBFGS 后约 `71 W/(m*K)`。
    - 这些结果的全量未加权 MSE 与旧目标函数几乎相同，说明 MSE 不能单独判断物理反演是否更可信。
-14. 下一步若继续提高 PINN 可信度，优先做 `--training-preset stable` 下的多 seed、ROI 和 `mm_per_px` 敏感性矩阵，而不是继续加重热前沿权重或改变 PDE 配点分布。
+14. 下一步若继续提高 PINN 可信度，优先在单次反演入口里继续强化质量守卫和 ROI/标定诊断，而不是先做批量反演；每个单次结果都必须通过 `quality_checks` 后再进入材料结论。

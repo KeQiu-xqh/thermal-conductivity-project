@@ -14,7 +14,9 @@ if str(CODE_DIR) not in sys.path:
 import train_pinn_1d  # type: ignore
 from train_pinn_1d import (  # type: ignore
     SimplePINN,
+    apply_material_preset,
     apply_training_preset,
+    build_quality_checks,
     compute_training_losses,
     normalize_dataset,
     prepare_training_context,
@@ -63,6 +65,13 @@ class BaseArgs:
     data_weighting_temp_scale_c = 10.0
     data_weighting_max_extra = 4.0
     training_preset = "none"
+    material_preset = "custom"
+    expected_k_min = None
+    expected_k_max = None
+    convergence_tail_steps = 300
+    min_quality_steps = 1000
+    max_alpha_tail_rel_range = 0.05
+    max_h_tail_rel_range = 0.05
 
 
 def make_dataset(args=BaseArgs):
@@ -174,6 +183,66 @@ class TrainingPresetTests(unittest.TestCase):
         self.assertEqual(args.data_batch_size, 16384)
         self.assertEqual(args.pde_sampling, "mixed")
         self.assertEqual(args.data_weighting, "delta-initial")
+
+
+class MaterialPresetTests(unittest.TestCase):
+    def test_h59_material_preset_sets_properties_and_expected_range(self):
+        class Args(BaseArgs):
+            material_preset = "h59"
+
+        args = apply_material_preset(Args())
+
+        self.assertEqual(args.rho, 8500.0)
+        self.assertEqual(args.cp, 380.0)
+        self.assertEqual(args.expected_k_min, 80.0)
+        self.assertEqual(args.expected_k_max, 120.0)
+
+    def test_explicit_expected_range_overrides_material_default(self):
+        class Args(BaseArgs):
+            material_preset = "h59"
+            expected_k_min = 90.0
+            expected_k_max = 105.0
+
+        args = apply_material_preset(Args())
+
+        self.assertEqual(args.expected_k_min, 90.0)
+        self.assertEqual(args.expected_k_max, 105.0)
+
+
+class QualityCheckTests(unittest.TestCase):
+    def test_quality_checks_reject_undertrained_history(self):
+        history = [
+            {"alpha_m2_s": 1.0e-5, "h_w_m2k": 12.0},
+            {"alpha_m2_s": 1.4e-5, "h_w_m2k": 11.0},
+            {"alpha_m2_s": 1.8e-5, "h_w_m2k": 10.8},
+        ]
+        summary = {"completed_steps": 3, "thermal_conductivity_w_mk": 95.0}
+
+        checks = build_quality_checks(history, summary, BaseArgs())
+
+        self.assertFalse(checks["enough_steps"])
+        self.assertFalse(checks["parameters_stable"])
+        self.assertFalse(checks["recommended_for_reporting"])
+        self.assertIn("completed_steps_below_min_quality_steps", checks["warnings"])
+
+    def test_quality_checks_reject_out_of_material_range_result(self):
+        class Args(BaseArgs):
+            expected_k_min = 80.0
+            expected_k_max = 120.0
+
+        history = [
+            {"alpha_m2_s": 2.0e-5, "h_w_m2k": 10.0},
+            {"alpha_m2_s": 2.01e-5, "h_w_m2k": 10.01},
+            {"alpha_m2_s": 2.02e-5, "h_w_m2k": 10.0},
+        ] * 400
+        summary = {"completed_steps": 1200, "thermal_conductivity_w_mk": 71.0}
+
+        checks = build_quality_checks(history, summary, Args())
+
+        self.assertTrue(checks["enough_steps"])
+        self.assertTrue(checks["parameters_stable"])
+        self.assertFalse(checks["expected_k_in_range"])
+        self.assertFalse(checks["recommended_for_reporting"])
 
 
 class DataWeightingTests(unittest.TestCase):

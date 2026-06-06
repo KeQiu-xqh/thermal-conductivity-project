@@ -291,3 +291,21 @@
   - `stable`: `data_batch_size=16384`, `pde_sampling=uniform`, `data_weighting=none`
   - `experimental`: `data_batch_size=16384`, `pde_sampling=mixed`, `data_weighting=delta-initial`
 - Current formal recommendation: use `--training-preset stable` for routine reruns; keep `experimental` only for diagnostics or controlled sensitivity studies.
+
+## 2026-06-07 PINN single-run reliability guard
+
+- `code/train_pinn_1d.py` now supports material presets:
+  - `--material-preset 6061`: `rho=2700`, `cp=900`, expected `k=130~190 W/(m*K)`
+  - `--material-preset 304`: `rho=7930`, `cp=500`, expected `k=10~25 W/(m*K)`
+  - `--material-preset h59`: `rho=8500`, `cp=380`, expected `k=80~120 W/(m*K)`
+- Summary now includes `quality_checks`, which checks:
+  - enough optimizer steps, default `min_quality_steps=1000`
+  - tail parameter stability over the last `300` steps
+  - optional expected material `k` range
+  - whether an experimental training preset was used
+- Existing H59 histories were checked with this guard:
+  - 500-step `k=60.09`: rejected for too few steps, unstable tail `alpha`, and out-of-range `k`
+  - 2000-step `k=95.55`: accepted
+  - stable mini-batch `k=93.38`: accepted
+  - experimental/mixed-weighted `k=71.10`: rejected for out-of-range `k`
+- Current rule for single inversion: do not report a run as a formal result unless `quality_checks.recommended_for_reporting=true`.
