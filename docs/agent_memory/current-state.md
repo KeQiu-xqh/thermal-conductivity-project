@@ -241,3 +241,17 @@
 - 已验证：
   - 单元测试：`python -m unittest tests.test_train_pinn_1d.TrainingControlTests`
   - 真实 smoke：从 `20260605_h59_100c_160328_x12_56_calib99mm_e2000_pinn.pt` 以 `--epochs 0 --resume-checkpoint ... --lbfgs-steps 1` 启动，summary 正确记录 `stage_counts={"lbfgs":1}`。
+
+## 2026-06-07 PINN 采样与损失优化
+
+- `code/train_pinn_1d.py` 已新增第一轮低风险训练优化入口：
+  - `--data-batch-size`：观测数据项可用较大 mini-batch；默认 `0` 保持旧的全量 data loss。
+  - `--pde-sampling mixed`：PDE 配点按 `70%` 全域、`20%` 热端附近、`10%` 早期时间采样。
+  - `--data-weighting delta-initial`：按相对初始温度变化提高升温前沿权重。
+- summary 现在额外记录 `data_batch_size`、`pde_sampling`、`data_weighting`、`data_weighting_config`、`full_temperature_mse_c2`、`final_unweighted_data_loss`。
+- 已完成验证：
+  - `python -m unittest discover -s tests`
+  - H59 真实 `.npz` smoke：`--epochs 2 --data-batch-size 1024 --pde-sampling mixed --data-weighting delta-initial --lbfgs-steps 1`
+- 当前判断：
+  - 这次只改变训练采样和 data loss 权重，不改变 PDE、边界条件或反演参数。
+  - 正式结果仍需用同一 ROI 做旧/新训练对照，并优先看 `alpha/h/k` 稳定性和全量未加权 MSE。

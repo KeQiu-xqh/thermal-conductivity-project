@@ -36,6 +36,14 @@ DEFAULT_H_INIT = 12.0
 DEFAULT_INITIAL_MODE = "measured"
 DEFAULT_MEASURED_INITIAL_FRAME_COUNT = 5
 DEFAULT_RIGHT_BC_MODE = "none"
+DEFAULT_DATA_BATCH_SIZE = 0
+DEFAULT_PDE_SAMPLING = "uniform"
+DEFAULT_PDE_HOT_X_MAX = 0.2
+DEFAULT_PDE_EARLY_T_MAX = 0.3
+DEFAULT_DATA_WEIGHTING = "none"
+DEFAULT_DATA_WEIGHTING_LAMBDA = 1.0
+DEFAULT_DATA_WEIGHTING_TEMP_SCALE_C = 10.0
+DEFAULT_DATA_WEIGHTING_MAX_EXTRA = 4.0
 
 
 def parse_args():
@@ -71,6 +79,14 @@ def parse_args():
     parser.add_argument("--early-stop-window", type=int, default=0)
     parser.add_argument("--early-stop-loss-rel-tol", type=float, default=1e-4)
     parser.add_argument("--early-stop-param-rel-tol", type=float, default=5e-4)
+    parser.add_argument("--data-batch-size", type=int, default=DEFAULT_DATA_BATCH_SIZE)
+    parser.add_argument("--pde-sampling", choices=["uniform", "mixed"], default=DEFAULT_PDE_SAMPLING)
+    parser.add_argument("--pde-hot-x-max", type=float, default=DEFAULT_PDE_HOT_X_MAX)
+    parser.add_argument("--pde-early-t-max", type=float, default=DEFAULT_PDE_EARLY_T_MAX)
+    parser.add_argument("--data-weighting", choices=["none", "delta-initial"], default=DEFAULT_DATA_WEIGHTING)
+    parser.add_argument("--data-weighting-lambda", type=float, default=DEFAULT_DATA_WEIGHTING_LAMBDA)
+    parser.add_argument("--data-weighting-temp-scale-c", type=float, default=DEFAULT_DATA_WEIGHTING_TEMP_SCALE_C)
+    parser.add_argument("--data-weighting-max-extra", type=float, default=DEFAULT_DATA_WEIGHTING_MAX_EXTRA)
     parser.add_argument("--initial-mode", choices=["ambient", "measured"], default=DEFAULT_INITIAL_MODE)
     parser.add_argument("--measured-initial-frame-count", type=int, default=DEFAULT_MEASURED_INITIAL_FRAME_COUNT)
     parser.add_argument("--right-bc-mode", choices=["none", "robin"], default=DEFAULT_RIGHT_BC_MODE)
@@ -146,6 +162,24 @@ def sample_collocation_points(count, time_min, time_max, x_min, x_max, device):
     t = torch.rand(count, 1, device=device) * (time_max - time_min) + time_min
     x = torch.rand(count, 1, device=device) * (x_max - x_min) + x_min
     return torch.cat([x, t], dim=1)
+
+
+def sample_mixed_collocation_points(count, hot_x_max, early_t_max, device):
+    hot_count = int(count * 0.2)
+    early_count = int(count * 0.1)
+    uniform_count = max(0, count - hot_count - early_count)
+    hot_x_max = min(max(float(hot_x_max), 0.0), 1.0)
+    early_t_max = min(max(float(early_t_max), 0.0), 1.0)
+    parts = []
+    if uniform_count:
+        parts.append(sample_collocation_points(uniform_count, 0.0, 1.0, 0.0, 1.0, device))
+    if hot_count:
+        parts.append(sample_collocation_points(hot_count, 0.0, 1.0, 0.0, hot_x_max, device))
+    if early_count:
+        parts.append(sample_collocation_points(early_count, 0.0, early_t_max, 0.0, 1.0, device))
+    if not parts:
+        return torch.empty((0, 2), dtype=torch.float32, device=device)
+    return torch.cat(parts, dim=0)
 
 
 def estimate_mm_per_px(roi_width_px, roi_height_px, visible_length_mm, diameter_mm):
@@ -286,6 +320,36 @@ def build_initial_profile_target(dataset, initial_mode, t_inf_c, measured_frame_
     return measured_profile_norm.reshape(-1, 1)
 
 
+def build_initial_profile_c(dataset, initial_mode, t_inf_c, measured_frame_count):
+    x_count = dataset["xt_grid_c"].shape[1]
+    if initial_mode == "ambient":
+        return np.full((x_count,), float(t_inf_c), dtype=np.float32)
+    frame_count = max(1, min(int(measured_frame_count), dataset["xt_grid_c"].shape[0]))
+    return dataset["xt_grid_c"][:frame_count].mean(axis=0).astype(np.float32)
+
+
+def build_data_weights(dataset, args):
+    mode = getattr(args, "data_weighting", DEFAULT_DATA_WEIGHTING)
+    if mode == "none":
+        return np.ones((dataset["temperature_c"].shape[0], 1), dtype=np.float32)
+    if mode != "delta-initial":
+        raise ValueError(f"Unsupported data weighting mode: {mode}")
+
+    initial_profile = build_initial_profile_c(
+        dataset,
+        initial_mode=args.initial_mode,
+        t_inf_c=args.t_inf_c,
+        measured_frame_count=args.measured_initial_frame_count,
+    )
+    scale = max(float(getattr(args, "data_weighting_temp_scale_c", DEFAULT_DATA_WEIGHTING_TEMP_SCALE_C)), 1e-6)
+    max_extra = max(float(getattr(args, "data_weighting_max_extra", DEFAULT_DATA_WEIGHTING_MAX_EXTRA)), 0.0)
+    weight_lambda = float(getattr(args, "data_weighting_lambda", DEFAULT_DATA_WEIGHTING_LAMBDA))
+    delta = np.abs(dataset["xt_grid_c"] - initial_profile.reshape(1, -1))
+    extra = np.clip(delta / scale, 0.0, max_extra)
+    weights = 1.0 + weight_lambda * extra
+    return weights.astype(np.float32).reshape(-1, 1)
+
+
 def compute_temperature_and_derivatives(model, coords, dataset):
     coords = coords.clone().detach().requires_grad_(True)
     pred_norm = model(coords)
@@ -366,6 +430,7 @@ def get_optimizer_lr(optimizer):
 def prepare_training_context(dataset, args, device):
     coords = torch.tensor(np.column_stack([dataset["x_norm"], dataset["t_norm"]]), dtype=torch.float32, device=device)
     targets = torch.tensor(dataset["u_norm"].reshape(-1, 1), dtype=torch.float32, device=device)
+    data_weights = torch.tensor(build_data_weights(dataset, args), dtype=torch.float32, device=device)
     time_axis_norm = ((dataset["time_axis_sec"] - dataset["t_min"]) / dataset["t_span_s"]).astype(np.float32)
     boundary_interp = build_boundary_interpolator(time_axis_norm, dataset["boundary_norm"])
     x_axis_norm = ((dataset["x_axis_heat_px"] - dataset["x_min"]) / (dataset["x_max"] - dataset["x_min"])).astype(np.float32)
@@ -384,6 +449,7 @@ def prepare_training_context(dataset, args, device):
     return {
         "coords": coords,
         "targets": targets,
+        "data_weights": data_weights,
         "boundary_interp": boundary_interp,
         "x_initial": x_initial,
         "t_zero": t_zero,
@@ -391,17 +457,38 @@ def prepare_training_context(dataset, args, device):
     }
 
 
-def sample_training_loss_points(args, device):
+def sample_data_indices(args, device, context=None):
+    batch_size = max(0, int(getattr(args, "data_batch_size", DEFAULT_DATA_BATCH_SIZE)))
+    if batch_size <= 0 or context is None:
+        return None
+    data_count = int(context["coords"].shape[0])
+    sample_count = min(batch_size, data_count)
+    return torch.randperm(data_count, device=device)[:sample_count]
+
+
+def sample_pde_points(args, device):
+    if getattr(args, "pde_sampling", DEFAULT_PDE_SAMPLING) == "mixed":
+        return sample_mixed_collocation_points(
+            count=args.collocation_points,
+            hot_x_max=getattr(args, "pde_hot_x_max", DEFAULT_PDE_HOT_X_MAX),
+            early_t_max=getattr(args, "pde_early_t_max", DEFAULT_PDE_EARLY_T_MAX),
+            device=device,
+        )
+    return sample_collocation_points(
+        count=args.collocation_points,
+        time_min=0.0,
+        time_max=1.0,
+        x_min=0.0,
+        x_max=1.0,
+        device=device,
+    )
+
+
+def sample_training_loss_points(args, device, context=None):
     boundary_count = max(64, args.collocation_points // 4)
     return {
-        "collocation": sample_collocation_points(
-            count=args.collocation_points,
-            time_min=0.0,
-            time_max=1.0,
-            x_min=0.0,
-            x_max=1.0,
-            device=device,
-        ),
+        "data_indices": sample_data_indices(args, device, context),
+        "collocation": sample_pde_points(args, device),
         "t_left": torch.rand(boundary_count, 1, device=device),
         "t_right": torch.rand(boundary_count, 1, device=device),
     }
@@ -411,8 +498,17 @@ def compute_training_losses(model, dataset, args, device, context, loss_points=N
     if loss_points is None:
         loss_points = sample_training_loss_points(args, device)
 
-    pred = model(context["coords"])
-    data_loss = torch.mean((pred - context["targets"]).pow(2))
+    data_indices = loss_points.get("data_indices")
+    if data_indices is None:
+        data_coords = context["coords"]
+        data_targets = context["targets"]
+        data_weights = context["data_weights"]
+    else:
+        data_coords = context["coords"][data_indices]
+        data_targets = context["targets"][data_indices]
+        data_weights = context["data_weights"][data_indices]
+    pred = model(data_coords)
+    data_loss = torch.mean(data_weights * (pred - data_targets).pow(2))
 
     pde_loss = compute_pde_loss(model, loss_points["collocation"], dataset, args)
 
@@ -490,7 +586,8 @@ def train_model(model, dataset, args, device):
 
     for epoch in range(args.epochs):
         optimizer.zero_grad()
-        losses = compute_training_losses(model, dataset, args, device, context)
+        loss_points = sample_training_loss_points(args, device, context)
+        losses = compute_training_losses(model, dataset, args, device, context, loss_points=loss_points)
         loss = losses[0]
         loss.backward()
         optimizer.step()
@@ -518,7 +615,7 @@ def train_model(model, dataset, args, device):
             line_search_fn=line_search,
         )
         for lbfgs_step in range(lbfgs_steps):
-            loss_points = sample_training_loss_points(args, device)
+            loss_points = sample_training_loss_points(args, device, context)
 
             def closure():
                 lbfgs_optimizer.zero_grad()
@@ -543,6 +640,14 @@ def train_model(model, dataset, args, device):
     return history
 
 
+def compute_full_unweighted_data_loss(model, dataset, device):
+    coords = torch.tensor(np.column_stack([dataset["x_norm"], dataset["t_norm"]]), dtype=torch.float32, device=device)
+    targets = torch.tensor(dataset["u_norm"].reshape(-1, 1), dtype=torch.float32, device=device)
+    with torch.no_grad():
+        pred = model(coords)
+    return float(torch.mean((pred - targets).pow(2)).item())
+
+
 def save_training_outputs(model, dataset, history, args, output_stem, device):
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
@@ -559,6 +664,7 @@ def save_training_outputs(model, dataset, history, args, output_stem, device):
         pred_norm = model(coords).cpu().numpy().reshape(dataset["xt_grid_c"].shape)
     pred_c = pred_norm * dataset["u_std"] + dataset["u_mean"]
     mse_c = float(np.mean((pred_c - dataset["xt_grid_c"]) ** 2))
+    final_unweighted_data_loss = compute_full_unweighted_data_loss(model, dataset, device)
 
     alpha_m2_s = float(model.alpha.item())
     h_w_m2k = float(model.h.item())
@@ -593,6 +699,8 @@ def save_training_outputs(model, dataset, history, args, output_stem, device):
         "completed_steps": len(history),
         "stage_counts": stage_counts,
         "temperature_mse_c2": mse_c,
+        "full_temperature_mse_c2": mse_c,
+        "final_unweighted_data_loss": final_unweighted_data_loss,
         "output_stem": output_stem,
         "mm_per_px": dataset["mm_per_px"],
         "calibration": dataset["calibration"],
@@ -608,6 +716,16 @@ def save_training_outputs(model, dataset, history, args, output_stem, device):
         "initial_mode": args.initial_mode,
         "measured_initial_frame_count": int(args.measured_initial_frame_count),
         "right_bc_mode": args.right_bc_mode,
+        "data_batch_size": int(args.data_batch_size),
+        "pde_sampling": args.pde_sampling,
+        "pde_hot_x_max": float(args.pde_hot_x_max),
+        "pde_early_t_max": float(args.pde_early_t_max),
+        "data_weighting": args.data_weighting,
+        "data_weighting_config": {
+            "lambda": float(args.data_weighting_lambda),
+            "temp_scale_c": float(args.data_weighting_temp_scale_c),
+            "max_extra": float(args.data_weighting_max_extra),
+        },
         "optimizer": {
             "adam_lr": float(args.lr),
             "lr_scheduler": args.lr_scheduler,

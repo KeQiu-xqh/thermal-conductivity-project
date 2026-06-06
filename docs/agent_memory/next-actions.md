@@ -36,3 +36,8 @@
    - 从已有 2000-step checkpoint 只做第二阶段：
      `python code\train_pinn_1d.py data\derived\20260605_h59_100c_160328_x12_56_calib99mm\2000.0.0.000000--20260605-160328_rod_xt_data.npz --epochs 0 --resume-checkpoint outputs\models\20260605_h59_100c_160328_x12_56_calib99mm_e2000_pinn.pt --lbfgs-steps 300 --lbfgs-lr 0.5 --rho 8500 --cp 380 --diameter-mm 8 --t-inf-c 24.5 --output-stem 20260605_h59_100c_160328_x12_56_lbfgs_from_e2000`
    - 判断是否收敛时优先看 `_history.json` 的 `stage/lr/loss/alpha_m2_s/h_w_m2k`，不要只看最终热导率。
+13. 下一步正式评估 PINN 优化版时，优先在同一 ROI 上做旧/新训练对照：
+   - 旧基线：保留默认 `--data-batch-size 0 --pde-sampling uniform --data-weighting none`
+   - 新方案：加入 `--data-batch-size 16384 --pde-sampling mixed --data-weighting delta-initial`
+   - 两边都记录 `alpha/h/k`、`full_temperature_mse_c2`、`final_unweighted_data_loss` 和 `_history.json` 中参数收敛情况。
+   - 不要只用短 smoke 的 `k` 判断优化效果；短 smoke 只用于确认代码路径和 summary 字段。
