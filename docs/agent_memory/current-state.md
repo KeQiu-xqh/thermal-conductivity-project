@@ -255,3 +255,21 @@
 - 当前判断：
   - 这次只改变训练采样和 data loss 权重，不改变 PDE、边界条件或反演参数。
   - 正式结果仍需用同一 ROI 做旧/新训练对照，并优先看 `alpha/h/k` 稳定性和全量未加权 MSE。
+
+## 2026-06-07 H59@100 C new PINN rerun
+
+- Dataset: `data/derived/20260605_h59_100c_160328_x12_56_calib99mm/2000.0.0.000000--20260605-160328_rod_xt_data.npz`
+- Calibration: `mm_per_px = 1.6097561120986938`
+- Main ROI: `x=12~56, y=30~34`
+- Optimized new-PINN config: `--epochs 2000 --lr-scheduler plateau --lbfgs-steps 300 --data-batch-size 16384 --pde-sampling mixed --data-weighting delta-initial`
+  - `k = 71.10 W/(m*K)`
+  - `alpha = 2.20116e-5 m^2/s`
+  - `h = 10.56 W/m^2/K`
+  - `full_temperature_mse_c2 = 0.09794`
+  - `stage_counts = {"adam": 2000, "lbfgs": 300}`
+- Same new code with legacy objective, full data, uniform PDE, no data weighting, 2000 Adam, no LBFGS:
+  - `k = 94.60 W/(m*K)`
+  - `alpha = 2.92891e-5 m^2/s`
+  - `h = 10.48 W/m^2/K`
+  - `full_temperature_mse_c2 = 0.09758`
+- Current interpretation: optimized new-PINN training pulls this H59 batch down to about `71 W/(m*K)`, while full MSE is almost unchanged. Legacy objective still reproduces about `95 W/(m*K)`. Treat `71 W/(m*K)` as a sampling/weighting-objective result, not a replacement H59 main conclusion, until multi-seed and ROI sensitivity checks are done.
