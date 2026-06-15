@@ -69,7 +69,7 @@ def build_pinn_command(task, config, observations_path, output_stem):
     physics = config["physics"]
     sampling = config["sampling"]
     pinn = config["pinn"]
-    return [
+    command = [
         sys.executable,
         str(PROJECT_ROOT / "code" / "train_pinn_1d.py"),
         str(Path(observations_path)),
@@ -77,6 +77,10 @@ def build_pinn_command(task, config, observations_path, output_stem):
         str(pinn["epochs"]),
         "--lr",
         str(pinn["lr"]),
+        "--alpha-lr",
+        str(pinn.get("alpha_lr", pinn["lr"])),
+        "--h-lr",
+        str(pinn.get("h_lr", pinn["lr"])),
         "--hidden-width",
         str(pinn["hidden_width"]),
         "--hidden-depth",
@@ -126,6 +130,9 @@ def build_pinn_command(task, config, observations_path, output_stem):
         "--output-stem",
         output_stem,
     ]
+    if pinn.get("fixed_h") is not None:
+        command.extend(["--fixed-h", str(pinn["fixed_h"])])
+    return command
 
 
 def _json_value(value):

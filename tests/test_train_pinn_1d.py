@@ -19,6 +19,7 @@ from train_pinn_1d import (  # type: ignore
     SimplePINN,
     apply_material_preset,
     build_best_physical_result,
+    build_optimizer,
     build_quality_checks,
     compute_training_losses,
     load_checkpoint_into_model,
@@ -37,6 +38,7 @@ class BaseArgs:
     hidden_depth = 2
     alpha_init = 2.5e-5
     h_init = 12.0
+    fixed_h = None
     visible_length_mm = 136.0
     diameter_mm = 8.0
     calibration_mode = "diameter"
@@ -50,6 +52,8 @@ class BaseArgs:
     initial_mode = "measured"
     measured_initial_frame_count = 1
     lr = 1.0e-3
+    alpha_lr = None
+    h_lr = None
     epochs = 1
     collocation_points = 20
     data_weight = 1.0
@@ -348,6 +352,33 @@ class CheckpointCompatibilityTests(unittest.TestCase):
 
         self.assertEqual(metadata["resume_mode"], "model_only_legacy")
         self.assertFalse(metadata["full_resume_available"])
+
+
+class PhysicalParameterLearningRateTests(unittest.TestCase):
+    def test_optimizer_uses_separate_alpha_and_h_learning_rates(self):
+        class Args(BaseArgs):
+            lr = 1.0e-3
+            alpha_lr = 2.0e-3
+            h_lr = 1.0e-2
+
+        model = SimplePINN(hidden_width=8, hidden_depth=2)
+        optimizer = build_optimizer(model, Args())
+
+        self.assertEqual([group["lr"] for group in optimizer.param_groups], [1.0e-3, 2.0e-3, 1.0e-2])
+
+    def test_fixed_h_is_not_added_to_optimizer_and_does_not_change(self):
+        class Args(BaseArgs):
+            fixed_h = 10.0
+
+        model = SimplePINN(hidden_width=8, hidden_depth=2, fixed_h=Args.fixed_h)
+        optimizer = build_optimizer(model, Args())
+        initial_h = float(model.h.item())
+        loss = model(torch.rand(4, 2)).pow(2).mean() + model.alpha
+        loss.backward()
+        optimizer.step()
+
+        self.assertAlmostEqual(float(model.h.item()), initial_h, places=7)
+        self.assertEqual([group["name"] for group in optimizer.param_groups], ["network", "alpha"])
 
 
 class LbfgsSamplingTests(unittest.TestCase):

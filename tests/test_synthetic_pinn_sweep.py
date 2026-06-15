@@ -55,6 +55,7 @@ class SweepRunnerTests(unittest.TestCase):
         self.assertNotIn("--expected-k-min", joined)
         self.assertNotIn("--expected-k-max", joined)
         self.assertNotIn("true_k", joined)
+        self.assertIn("--fixed-h 10.0", joined)
 
     def test_completed_matching_task_is_skipped(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

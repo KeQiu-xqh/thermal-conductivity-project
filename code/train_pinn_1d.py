@@ -49,6 +49,8 @@ def parse_args():
     parser.add_argument("dataset_path", nargs="?", default=str(DEFAULT_DATASET))
     parser.add_argument("--epochs", type=int, default=DEFAULT_EPOCHS)
     parser.add_argument("--lr", type=float, default=DEFAULT_LR)
+    parser.add_argument("--alpha-lr", type=float, default=None)
+    parser.add_argument("--h-lr", type=float, default=None)
     parser.add_argument("--hidden-width", type=int, default=DEFAULT_HIDDEN_WIDTH)
     parser.add_argument("--hidden-depth", type=int, default=DEFAULT_HIDDEN_DEPTH)
     parser.add_argument("--collocation-points", type=int, default=DEFAULT_COLLLOCATION_POINTS)
@@ -68,6 +70,7 @@ def parse_args():
     parser.add_argument("--t-inf-c", type=float, default=DEFAULT_T_INF_C)
     parser.add_argument("--alpha-init", type=float, default=DEFAULT_ALPHA_INIT)
     parser.add_argument("--h-init", type=float, default=DEFAULT_H_INIT)
+    parser.add_argument("--fixed-h", type=float, default=None)
     parser.add_argument("--lr-scheduler", choices=["none", "plateau"], default="none")
     parser.add_argument("--lr-factor", type=float, default=0.5)
     parser.add_argument("--lr-patience", type=int, default=200)
@@ -412,7 +415,14 @@ def inverse_softplus(value):
 
 
 class SimplePINN(nn.Module):
-    def __init__(self, hidden_width=64, hidden_depth=4, alpha_init=DEFAULT_ALPHA_INIT, h_init=DEFAULT_H_INIT):
+    def __init__(
+        self,
+        hidden_width=64,
+        hidden_depth=4,
+        alpha_init=DEFAULT_ALPHA_INIT,
+        h_init=DEFAULT_H_INIT,
+        fixed_h=None,
+    ):
         super().__init__()
         layers = [nn.Linear(2, hidden_width), nn.Tanh()]
         for _ in range(hidden_depth - 1):
@@ -420,7 +430,12 @@ class SimplePINN(nn.Module):
         layers.append(nn.Linear(hidden_width, 1))
         self.network = nn.Sequential(*layers)
         self.alpha_raw = nn.Parameter(torch.tensor(inverse_softplus(alpha_init), dtype=torch.float32))
-        self.h_raw = nn.Parameter(torch.tensor(inverse_softplus(h_init), dtype=torch.float32))
+        effective_h = h_init if fixed_h is None else fixed_h
+        self.h_raw = nn.Parameter(
+            torch.tensor(inverse_softplus(effective_h), dtype=torch.float32),
+            requires_grad=fixed_h is None,
+        )
+        self.fixed_h = None if fixed_h is None else float(fixed_h)
 
     @property
     def alpha(self):
@@ -569,6 +584,18 @@ def build_lr_scheduler(optimizer, args):
     raise ValueError(f"Unsupported lr scheduler: {args.lr_scheduler}")
 
 
+def build_optimizer(model, args):
+    alpha_lr = float(args.lr if getattr(args, "alpha_lr", None) is None else args.alpha_lr)
+    h_lr = float(args.lr if getattr(args, "h_lr", None) is None else args.h_lr)
+    groups = [
+        {"params": model.network.parameters(), "lr": float(args.lr), "name": "network"},
+        {"params": [model.alpha_raw], "lr": alpha_lr, "name": "alpha"},
+    ]
+    if model.h_raw.requires_grad:
+        groups.append({"params": [model.h_raw], "lr": h_lr, "name": "h"})
+    return torch.optim.Adam(groups)
+
+
 def load_checkpoint_into_model(model, checkpoint_path, device):
     checkpoint_path = Path(checkpoint_path).expanduser().resolve()
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
@@ -715,7 +742,7 @@ def should_stop_early(history, window, loss_rel_tol, param_rel_tol):
 def train_model(model, dataset, args, device):
     model.to(device)
     context = prepare_training_context(dataset, args, device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    optimizer = build_optimizer(model, args)
     scheduler = build_lr_scheduler(optimizer, args)
     resume_metadata = getattr(args, "_resume_metadata", {}) or {}
     resume_mode = resume_metadata.get("resume_mode", "none")
@@ -882,6 +909,7 @@ def save_training_outputs(model, dataset, history, args, output_stem, device):
                 "hidden_depth": int(args.hidden_depth),
                 "alpha_init": float(args.alpha_init),
                 "h_init": float(args.h_init),
+                "fixed_h": None if args.fixed_h is None else float(args.fixed_h),
             },
             "final_alpha_m2_s": alpha_m2_s,
             "final_h_w_m2k": h_w_m2k,
@@ -899,6 +927,7 @@ def save_training_outputs(model, dataset, history, args, output_stem, device):
                     "hidden_depth": int(args.hidden_depth),
                     "alpha_init": float(args.alpha_init),
                     "h_init": float(args.h_init),
+                    "fixed_h": None if args.fixed_h is None else float(args.fixed_h),
                 },
                 "best_physical_result": best_physical_result,
             },
@@ -921,6 +950,7 @@ def save_training_outputs(model, dataset, history, args, output_stem, device):
         "calibration": dataset["calibration"],
         "alpha_m2_s": alpha_m2_s,
         "h_w_m2k": h_w_m2k,
+        "fixed_h_w_m2k": None if args.fixed_h is None else float(args.fixed_h),
         "thermal_conductivity_w_mk": conductivity,
         "material_preset": getattr(args, "material_preset", DEFAULT_MATERIAL_PRESET),
         "expected_k_min": None if getattr(args, "expected_k_min", None) is None else float(args.expected_k_min),
@@ -937,6 +967,8 @@ def save_training_outputs(model, dataset, history, args, output_stem, device):
         "objective_mode": "full_data_uniform_pde_unweighted",
         "optimizer": {
             "adam_lr": float(args.lr),
+            "alpha_lr": float(args.lr if args.alpha_lr is None else args.alpha_lr),
+            "h_lr": float(args.lr if args.h_lr is None else args.h_lr),
             "lr_scheduler": args.lr_scheduler,
             "lr_factor": float(args.lr_factor),
             "lr_patience": int(args.lr_patience),
@@ -1045,6 +1077,7 @@ def main():
         hidden_depth=args.hidden_depth,
         alpha_init=args.alpha_init,
         h_init=args.h_init,
+        fixed_h=args.fixed_h,
     )
     if args.resume_checkpoint:
         checkpoint_metadata = load_checkpoint_into_model(model, args.resume_checkpoint, device)
