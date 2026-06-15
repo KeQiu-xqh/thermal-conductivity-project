@@ -36,15 +36,6 @@ DEFAULT_H_INIT = 12.0
 DEFAULT_INITIAL_MODE = "measured"
 DEFAULT_MEASURED_INITIAL_FRAME_COUNT = 5
 DEFAULT_RIGHT_BC_MODE = "none"
-DEFAULT_DATA_BATCH_SIZE = 0
-DEFAULT_PDE_SAMPLING = "uniform"
-DEFAULT_PDE_HOT_X_MAX = 0.2
-DEFAULT_PDE_EARLY_T_MAX = 0.3
-DEFAULT_DATA_WEIGHTING = "none"
-DEFAULT_DATA_WEIGHTING_LAMBDA = 1.0
-DEFAULT_DATA_WEIGHTING_TEMP_SCALE_C = 10.0
-DEFAULT_DATA_WEIGHTING_MAX_EXTRA = 4.0
-DEFAULT_TRAINING_PRESET = "none"
 DEFAULT_MATERIAL_PRESET = "custom"
 MATERIAL_PRESETS = {
     "6061": {"rho": 2700.0, "cp": 900.0, "expected_k_min": 130.0, "expected_k_max": 190.0},
@@ -58,6 +49,8 @@ def parse_args():
     parser.add_argument("dataset_path", nargs="?", default=str(DEFAULT_DATASET))
     parser.add_argument("--epochs", type=int, default=DEFAULT_EPOCHS)
     parser.add_argument("--lr", type=float, default=DEFAULT_LR)
+    parser.add_argument("--alpha-lr", type=float, default=None)
+    parser.add_argument("--h-lr", type=float, default=None)
     parser.add_argument("--hidden-width", type=int, default=DEFAULT_HIDDEN_WIDTH)
     parser.add_argument("--hidden-depth", type=int, default=DEFAULT_HIDDEN_DEPTH)
     parser.add_argument("--collocation-points", type=int, default=DEFAULT_COLLLOCATION_POINTS)
@@ -77,6 +70,8 @@ def parse_args():
     parser.add_argument("--t-inf-c", type=float, default=DEFAULT_T_INF_C)
     parser.add_argument("--alpha-init", type=float, default=DEFAULT_ALPHA_INIT)
     parser.add_argument("--h-init", type=float, default=DEFAULT_H_INIT)
+    parser.add_argument("--fixed-h", type=float, default=None)
+    parser.add_argument("--allow-joint-h-reporting", action="store_true")
     parser.add_argument("--lr-scheduler", choices=["none", "plateau"], default="none")
     parser.add_argument("--lr-factor", type=float, default=0.5)
     parser.add_argument("--lr-patience", type=int, default=200)
@@ -89,19 +84,11 @@ def parse_args():
     parser.add_argument("--early-stop-window", type=int, default=0)
     parser.add_argument("--early-stop-loss-rel-tol", type=float, default=1e-4)
     parser.add_argument("--early-stop-param-rel-tol", type=float, default=5e-4)
-    parser.add_argument("--data-batch-size", type=int, default=DEFAULT_DATA_BATCH_SIZE)
-    parser.add_argument("--pde-sampling", choices=["uniform", "mixed"], default=DEFAULT_PDE_SAMPLING)
-    parser.add_argument("--pde-hot-x-max", type=float, default=DEFAULT_PDE_HOT_X_MAX)
-    parser.add_argument("--pde-early-t-max", type=float, default=DEFAULT_PDE_EARLY_T_MAX)
-    parser.add_argument("--data-weighting", choices=["none", "delta-initial"], default=DEFAULT_DATA_WEIGHTING)
-    parser.add_argument("--data-weighting-lambda", type=float, default=DEFAULT_DATA_WEIGHTING_LAMBDA)
-    parser.add_argument("--data-weighting-temp-scale-c", type=float, default=DEFAULT_DATA_WEIGHTING_TEMP_SCALE_C)
-    parser.add_argument("--data-weighting-max-extra", type=float, default=DEFAULT_DATA_WEIGHTING_MAX_EXTRA)
-    parser.add_argument("--training-preset", choices=["none", "stable", "experimental"], default=DEFAULT_TRAINING_PRESET)
     parser.add_argument("--convergence-tail-steps", type=int, default=300)
     parser.add_argument("--min-quality-steps", type=int, default=1000)
     parser.add_argument("--max-alpha-tail-rel-range", type=float, default=0.05)
     parser.add_argument("--max-h-tail-rel-range", type=float, default=0.05)
+    parser.add_argument("--allow-undertrained-best-physical", action="store_true")
     parser.add_argument("--initial-mode", choices=["ambient", "measured"], default=DEFAULT_INITIAL_MODE)
     parser.add_argument("--measured-initial-frame-count", type=int, default=DEFAULT_MEASURED_INITIAL_FRAME_COUNT)
     parser.add_argument("--right-bc-mode", choices=["none", "robin"], default=DEFAULT_RIGHT_BC_MODE)
@@ -116,8 +103,7 @@ def parse_args():
     parser.add_argument("--output-stem", default=None)
     parser.add_argument("--skip-train", action="store_true")
     args = parser.parse_args()
-    args = apply_material_preset(args)
-    return apply_training_preset(args)
+    return apply_material_preset(args)
 
 
 def apply_material_preset(args):
@@ -136,29 +122,139 @@ def apply_material_preset(args):
     return args
 
 
-def apply_training_preset(args):
-    preset = getattr(args, "training_preset", DEFAULT_TRAINING_PRESET)
-    if preset == "none":
-        return args
-    if preset == "stable":
-        args.data_batch_size = 16384
-        args.pde_sampling = "uniform"
-        args.data_weighting = "none"
-        return args
-    if preset == "experimental":
-        args.data_batch_size = 16384
-        args.pde_sampling = "mixed"
-        args.data_weighting = "delta-initial"
-        return args
-    raise ValueError(f"Unsupported training preset: {preset}")
-
-
 def tail_relative_range(history, key, tail_steps):
     values = [float(row[key]) for row in history[-tail_steps:] if key in row and row[key] is not None]
     if not values:
         return None
     denominator = max(abs(values[-1]), 1.0e-12)
     return float((max(values) - min(values)) / denominator)
+
+
+def row_step(row, fallback_index=0):
+    return int(row.get("step", row.get("epoch", fallback_index)))
+
+
+def step_window_rows(history, end_step, window_steps):
+    start_step = int(end_step) - max(0, int(window_steps))
+    return [
+        row
+        for index, row in enumerate(history)
+        if start_step <= row_step(row, index) <= int(end_step)
+    ]
+
+
+def relative_range_for_rows(rows, key):
+    values = [float(row[key]) for row in rows if key in row and row[key] is not None]
+    if not values:
+        return None
+    denominator = max(abs(values[-1]), 1.0e-12)
+    return float((max(values) - min(values)) / denominator)
+
+
+def row_thermal_conductivity(row, args):
+    if "thermal_conductivity_w_mk" in row and row["thermal_conductivity_w_mk"] is not None:
+        return float(row["thermal_conductivity_w_mk"])
+    return convert_alpha_to_conductivity(float(row["alpha_m2_s"]), args.rho, args.cp)
+
+
+def build_best_physical_result(history, args):
+    if not history:
+        return {"found": False, "reason": "empty_history"}
+
+    expected_k_min = getattr(args, "expected_k_min", None)
+    expected_k_max = getattr(args, "expected_k_max", None)
+    min_quality_steps = max(0, int(getattr(args, "min_quality_steps", 1000)))
+    allow_undertrained = bool(getattr(args, "allow_undertrained_best_physical", False))
+    tail_steps = max(1, int(getattr(args, "convergence_tail_steps", 300)))
+    max_alpha_range = float(getattr(args, "max_alpha_tail_rel_range", 0.05))
+    max_h_range = float(getattr(args, "max_h_tail_rel_range", 0.05))
+    preliminary_candidates = []
+    for index, row in enumerate(history):
+        step = row_step(row, index)
+        completed_steps = step + 1
+        if completed_steps < min_quality_steps and not allow_undertrained:
+            continue
+
+        conductivity = row_thermal_conductivity(row, args)
+        if expected_k_min is not None and conductivity < float(expected_k_min):
+            continue
+        if expected_k_max is not None and conductivity > float(expected_k_max):
+            continue
+
+        window = step_window_rows(history, step, tail_steps)
+        if len(window) < 2:
+            continue
+        alpha_range = relative_range_for_rows(window, "alpha_m2_s")
+        h_range = relative_range_for_rows(window, "h_w_m2k")
+        if alpha_range is None or h_range is None:
+            continue
+        if alpha_range > max_alpha_range or h_range > max_h_range:
+            continue
+
+        data_loss = float(row.get("data_loss", math.inf))
+        if not math.isfinite(data_loss):
+            continue
+
+        pde_losses = [float(item["pde_loss"]) for item in window if "pde_loss" in item and item["pde_loss"] is not None]
+        if pde_losses:
+            median_recent_pde = float(np.median(np.asarray(pde_losses, dtype=np.float64)))
+            pde_limit = max(median_recent_pde * 2.0, 1.0e-12)
+            if float(row.get("pde_loss", math.inf)) > pde_limit:
+                continue
+        else:
+            median_recent_pde = None
+            pde_limit = None
+
+        candidate = {
+            "found": True,
+            "row_index": index,
+            "step": step,
+            "completed_steps": completed_steps,
+            "stage": row.get("stage", "unknown"),
+            "alpha_m2_s": float(row["alpha_m2_s"]),
+            "h_w_m2k": float(row["h_w_m2k"]),
+            "thermal_conductivity_w_mk": conductivity,
+            "data_loss": data_loss,
+            "pde_loss": None if "pde_loss" not in row else float(row["pde_loss"]),
+            "median_recent_pde_loss": median_recent_pde,
+            "pde_loss_limit": pde_limit,
+            "alpha_tail_rel_range": alpha_range,
+            "h_tail_rel_range": h_range,
+            "tail_window_steps": tail_steps,
+            "min_quality_steps": min_quality_steps,
+            "undertrained_best_physical_allowed": allow_undertrained,
+        }
+        preliminary_candidates.append(candidate)
+
+    if not preliminary_candidates:
+        return {
+            "found": False,
+            "reason": "no_reportable_physical_plateau",
+            "tail_window_steps": tail_steps,
+            "min_quality_steps": min_quality_steps,
+            "undertrained_best_physical_allowed": allow_undertrained,
+        }
+
+    best_data_loss = min(candidate["data_loss"] for candidate in preliminary_candidates)
+    data_loss_limit = float(best_data_loss) * 1.10
+    candidates = [
+        dict(candidate, best_data_loss=float(best_data_loss), data_loss_limit=float(data_loss_limit))
+        for candidate in preliminary_candidates
+        if candidate["data_loss"] <= data_loss_limit
+    ]
+    if not candidates:
+        return {
+            "found": False,
+            "reason": "physical_candidates_exceed_data_loss_limit",
+            "best_data_loss": float(best_data_loss),
+            "data_loss_limit": float(data_loss_limit),
+            "tail_window_steps": tail_steps,
+            "min_quality_steps": min_quality_steps,
+            "undertrained_best_physical_allowed": allow_undertrained,
+        }
+
+    best_candidate = max(candidates, key=lambda candidate: candidate["step"])
+    return best_candidate
 
 
 def build_quality_checks(history, summary, args):
@@ -186,23 +282,26 @@ def build_quality_checks(history, summary, args):
         expected_k_in_range = float(expected_k_min) <= float(conductivity) <= float(expected_k_max)
 
     warnings = []
+    joint_h_requires_validation = (
+        getattr(args, "fixed_h", None) is None
+        and not bool(getattr(args, "allow_joint_h_reporting", False))
+    )
     if not enough_steps:
         warnings.append("completed_steps_below_min_quality_steps")
     if not parameters_stable:
         warnings.append("tail_parameters_not_stable")
     if expected_k_in_range is False:
         warnings.append("thermal_conductivity_outside_expected_material_range")
-    if getattr(args, "training_preset", DEFAULT_TRAINING_PRESET) == "experimental":
-        warnings.append("experimental_training_preset_not_for_formal_reporting")
-
+    if joint_h_requires_validation:
+        warnings.append("joint_h_requires_multistart_validation")
     if expected_k_in_range is None:
-        recommended = enough_steps and parameters_stable and getattr(args, "training_preset", DEFAULT_TRAINING_PRESET) != "experimental"
+        recommended = enough_steps and parameters_stable and not joint_h_requires_validation
     else:
         recommended = (
             enough_steps
             and parameters_stable
             and expected_k_in_range
-            and getattr(args, "training_preset", DEFAULT_TRAINING_PRESET) != "experimental"
+            and not joint_h_requires_validation
         )
 
     return {
@@ -219,6 +318,7 @@ def build_quality_checks(history, summary, args):
         "expected_k_min": None if expected_k_min is None else float(expected_k_min),
         "expected_k_max": None if expected_k_max is None else float(expected_k_max),
         "expected_k_in_range": expected_k_in_range,
+        "joint_h_requires_multistart_validation": joint_h_requires_validation,
     }
 
 
@@ -283,24 +383,6 @@ def sample_collocation_points(count, time_min, time_max, x_min, x_max, device):
     return torch.cat([x, t], dim=1)
 
 
-def sample_mixed_collocation_points(count, hot_x_max, early_t_max, device):
-    hot_count = int(count * 0.2)
-    early_count = int(count * 0.1)
-    uniform_count = max(0, count - hot_count - early_count)
-    hot_x_max = min(max(float(hot_x_max), 0.0), 1.0)
-    early_t_max = min(max(float(early_t_max), 0.0), 1.0)
-    parts = []
-    if uniform_count:
-        parts.append(sample_collocation_points(uniform_count, 0.0, 1.0, 0.0, 1.0, device))
-    if hot_count:
-        parts.append(sample_collocation_points(hot_count, 0.0, 1.0, 0.0, hot_x_max, device))
-    if early_count:
-        parts.append(sample_collocation_points(early_count, 0.0, early_t_max, 0.0, 1.0, device))
-    if not parts:
-        return torch.empty((0, 2), dtype=torch.float32, device=device)
-    return torch.cat(parts, dim=0)
-
-
 def estimate_mm_per_px(roi_width_px, roi_height_px, visible_length_mm, diameter_mm):
     length_based = float(visible_length_mm) / float(roi_width_px)
     diameter_based = float(diameter_mm) / float(roi_height_px)
@@ -346,7 +428,14 @@ def inverse_softplus(value):
 
 
 class SimplePINN(nn.Module):
-    def __init__(self, hidden_width=64, hidden_depth=4, alpha_init=DEFAULT_ALPHA_INIT, h_init=DEFAULT_H_INIT):
+    def __init__(
+        self,
+        hidden_width=64,
+        hidden_depth=4,
+        alpha_init=DEFAULT_ALPHA_INIT,
+        h_init=DEFAULT_H_INIT,
+        fixed_h=None,
+    ):
         super().__init__()
         layers = [nn.Linear(2, hidden_width), nn.Tanh()]
         for _ in range(hidden_depth - 1):
@@ -354,7 +443,12 @@ class SimplePINN(nn.Module):
         layers.append(nn.Linear(hidden_width, 1))
         self.network = nn.Sequential(*layers)
         self.alpha_raw = nn.Parameter(torch.tensor(inverse_softplus(alpha_init), dtype=torch.float32))
-        self.h_raw = nn.Parameter(torch.tensor(inverse_softplus(h_init), dtype=torch.float32))
+        effective_h = h_init if fixed_h is None else fixed_h
+        self.h_raw = nn.Parameter(
+            torch.tensor(inverse_softplus(effective_h), dtype=torch.float32),
+            requires_grad=fixed_h is None,
+        )
+        self.fixed_h = None if fixed_h is None else float(fixed_h)
 
     @property
     def alpha(self):
@@ -439,36 +533,6 @@ def build_initial_profile_target(dataset, initial_mode, t_inf_c, measured_frame_
     return measured_profile_norm.reshape(-1, 1)
 
 
-def build_initial_profile_c(dataset, initial_mode, t_inf_c, measured_frame_count):
-    x_count = dataset["xt_grid_c"].shape[1]
-    if initial_mode == "ambient":
-        return np.full((x_count,), float(t_inf_c), dtype=np.float32)
-    frame_count = max(1, min(int(measured_frame_count), dataset["xt_grid_c"].shape[0]))
-    return dataset["xt_grid_c"][:frame_count].mean(axis=0).astype(np.float32)
-
-
-def build_data_weights(dataset, args):
-    mode = getattr(args, "data_weighting", DEFAULT_DATA_WEIGHTING)
-    if mode == "none":
-        return np.ones((dataset["temperature_c"].shape[0], 1), dtype=np.float32)
-    if mode != "delta-initial":
-        raise ValueError(f"Unsupported data weighting mode: {mode}")
-
-    initial_profile = build_initial_profile_c(
-        dataset,
-        initial_mode=args.initial_mode,
-        t_inf_c=args.t_inf_c,
-        measured_frame_count=args.measured_initial_frame_count,
-    )
-    scale = max(float(getattr(args, "data_weighting_temp_scale_c", DEFAULT_DATA_WEIGHTING_TEMP_SCALE_C)), 1e-6)
-    max_extra = max(float(getattr(args, "data_weighting_max_extra", DEFAULT_DATA_WEIGHTING_MAX_EXTRA)), 0.0)
-    weight_lambda = float(getattr(args, "data_weighting_lambda", DEFAULT_DATA_WEIGHTING_LAMBDA))
-    delta = np.abs(dataset["xt_grid_c"] - initial_profile.reshape(1, -1))
-    extra = np.clip(delta / scale, 0.0, max_extra)
-    weights = 1.0 + weight_lambda * extra
-    return weights.astype(np.float32).reshape(-1, 1)
-
-
 def compute_temperature_and_derivatives(model, coords, dataset):
     coords = coords.clone().detach().requires_grad_(True)
     pred_norm = model(coords)
@@ -533,13 +597,37 @@ def build_lr_scheduler(optimizer, args):
     raise ValueError(f"Unsupported lr scheduler: {args.lr_scheduler}")
 
 
+def build_optimizer(model, args):
+    alpha_lr = float(args.lr if getattr(args, "alpha_lr", None) is None else args.alpha_lr)
+    h_lr = float(args.lr if getattr(args, "h_lr", None) is None else args.h_lr)
+    groups = [
+        {"params": model.network.parameters(), "lr": float(args.lr), "name": "network"},
+        {"params": [model.alpha_raw], "lr": alpha_lr, "name": "alpha"},
+    ]
+    if model.h_raw.requires_grad:
+        groups.append({"params": [model.h_raw], "lr": h_lr, "name": "h"})
+    return torch.optim.Adam(groups)
+
+
 def load_checkpoint_into_model(model, checkpoint_path, device):
     checkpoint_path = Path(checkpoint_path).expanduser().resolve()
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     if "model_state" not in checkpoint:
         raise KeyError(f"Checkpoint lacks model_state: {checkpoint_path}")
     model.load_state_dict(checkpoint["model_state"])
-    return {key: value for key, value in checkpoint.items() if key != "model_state"}
+    metadata = {key: value for key, value in checkpoint.items() if key != "model_state"}
+    full_resume_available = (
+        "optimizer_state" in metadata
+        and "history" in metadata
+        and "completed_steps" in metadata
+    )
+    metadata["full_resume_available"] = bool(full_resume_available)
+    metadata["resume_mode"] = "full" if full_resume_available else "model_only_legacy"
+    return metadata
+
+
+def public_args_dict(args):
+    return {key: value for key, value in vars(args).items() if not key.startswith("_")}
 
 
 def get_optimizer_lr(optimizer):
@@ -549,7 +637,6 @@ def get_optimizer_lr(optimizer):
 def prepare_training_context(dataset, args, device):
     coords = torch.tensor(np.column_stack([dataset["x_norm"], dataset["t_norm"]]), dtype=torch.float32, device=device)
     targets = torch.tensor(dataset["u_norm"].reshape(-1, 1), dtype=torch.float32, device=device)
-    data_weights = torch.tensor(build_data_weights(dataset, args), dtype=torch.float32, device=device)
     time_axis_norm = ((dataset["time_axis_sec"] - dataset["t_min"]) / dataset["t_span_s"]).astype(np.float32)
     boundary_interp = build_boundary_interpolator(time_axis_norm, dataset["boundary_norm"])
     x_axis_norm = ((dataset["x_axis_heat_px"] - dataset["x_min"]) / (dataset["x_max"] - dataset["x_min"])).astype(np.float32)
@@ -568,7 +655,6 @@ def prepare_training_context(dataset, args, device):
     return {
         "coords": coords,
         "targets": targets,
-        "data_weights": data_weights,
         "boundary_interp": boundary_interp,
         "x_initial": x_initial,
         "t_zero": t_zero,
@@ -576,38 +662,17 @@ def prepare_training_context(dataset, args, device):
     }
 
 
-def sample_data_indices(args, device, context=None):
-    batch_size = max(0, int(getattr(args, "data_batch_size", DEFAULT_DATA_BATCH_SIZE)))
-    if batch_size <= 0 or context is None:
-        return None
-    data_count = int(context["coords"].shape[0])
-    sample_count = min(batch_size, data_count)
-    return torch.randperm(data_count, device=device)[:sample_count]
-
-
-def sample_pde_points(args, device):
-    if getattr(args, "pde_sampling", DEFAULT_PDE_SAMPLING) == "mixed":
-        return sample_mixed_collocation_points(
-            count=args.collocation_points,
-            hot_x_max=getattr(args, "pde_hot_x_max", DEFAULT_PDE_HOT_X_MAX),
-            early_t_max=getattr(args, "pde_early_t_max", DEFAULT_PDE_EARLY_T_MAX),
-            device=device,
-        )
-    return sample_collocation_points(
-        count=args.collocation_points,
-        time_min=0.0,
-        time_max=1.0,
-        x_min=0.0,
-        x_max=1.0,
-        device=device,
-    )
-
-
 def sample_training_loss_points(args, device, context=None):
     boundary_count = max(64, args.collocation_points // 4)
     return {
-        "data_indices": sample_data_indices(args, device, context),
-        "collocation": sample_pde_points(args, device),
+        "collocation": sample_collocation_points(
+            count=args.collocation_points,
+            time_min=0.0,
+            time_max=1.0,
+            x_min=0.0,
+            x_max=1.0,
+            device=device,
+        ),
         "t_left": torch.rand(boundary_count, 1, device=device),
         "t_right": torch.rand(boundary_count, 1, device=device),
     }
@@ -617,17 +682,8 @@ def compute_training_losses(model, dataset, args, device, context, loss_points=N
     if loss_points is None:
         loss_points = sample_training_loss_points(args, device)
 
-    data_indices = loss_points.get("data_indices")
-    if data_indices is None:
-        data_coords = context["coords"]
-        data_targets = context["targets"]
-        data_weights = context["data_weights"]
-    else:
-        data_coords = context["coords"][data_indices]
-        data_targets = context["targets"][data_indices]
-        data_weights = context["data_weights"][data_indices]
-    pred = model(data_coords)
-    data_loss = torch.mean(data_weights * (pred - data_targets).pow(2))
+    pred = model(context["coords"])
+    data_loss = torch.mean((pred - context["targets"]).pow(2))
 
     pde_loss = compute_pde_loss(model, loss_points["collocation"], dataset, args)
 
@@ -699,11 +755,47 @@ def should_stop_early(history, window, loss_rel_tol, param_rel_tol):
 def train_model(model, dataset, args, device):
     model.to(device)
     context = prepare_training_context(dataset, args, device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    optimizer = build_optimizer(model, args)
     scheduler = build_lr_scheduler(optimizer, args)
+    resume_metadata = getattr(args, "_resume_metadata", {}) or {}
+    resume_mode = resume_metadata.get("resume_mode", "none")
     history = []
+    if resume_metadata.get("full_resume_available"):
+        history = list(resume_metadata.get("history", []))
+        optimizer.load_state_dict(resume_metadata["optimizer_state"])
+        if scheduler is not None and resume_metadata.get("scheduler_state") is not None:
+            scheduler.load_state_dict(resume_metadata["scheduler_state"])
+
+    candidate_states = {}
+    previous_best_state = resume_metadata.get("best_physical_model_state")
+    previous_best_summary = resume_metadata.get("best_physical_result")
+    if previous_best_state is not None and isinstance(previous_best_summary, dict) and previous_best_summary.get("found"):
+        candidate_states[int(previous_best_summary["step"])] = previous_best_state
+
+    def maybe_capture_candidate_state(row):
+        expected_k_min = getattr(args, "expected_k_min", None)
+        expected_k_max = getattr(args, "expected_k_max", None)
+        conductivity = row_thermal_conductivity(row, args)
+        if expected_k_min is not None and conductivity < float(expected_k_min):
+            return
+        if expected_k_max is not None and conductivity > float(expected_k_max):
+            return
+        completed_steps = row_step(row) + 1
+        if completed_steps < int(getattr(args, "min_quality_steps", 1000)) and not bool(
+            getattr(args, "allow_undertrained_best_physical", False)
+        ):
+            return
+        candidate_states[row_step(row)] = {
+            key: value.detach().cpu().clone()
+            for key, value in model.state_dict().items()
+        }
+
+    start_step = 0
+    if history:
+        start_step = max(row_step(row, index) for index, row in enumerate(history)) + 1
 
     for epoch in range(args.epochs):
+        step = start_step + epoch
         optimizer.zero_grad()
         loss_points = sample_training_loss_points(args, device, context)
         losses = compute_training_losses(model, dataset, args, device, context, loss_points=loss_points)
@@ -713,7 +805,8 @@ def train_model(model, dataset, args, device):
         if scheduler is not None:
             scheduler.step(float(loss.item()))
 
-        history.append(make_history_row(epoch, "adam", optimizer, model, losses))
+        history.append(make_history_row(step, "adam", optimizer, model, losses))
+        maybe_capture_candidate_state(history[-1])
         if should_stop_early(
             history,
             window=int(getattr(args, "early_stop_window", 0)),
@@ -745,8 +838,9 @@ def train_model(model, dataset, args, device):
             lbfgs_optimizer.step(closure)
             with torch.enable_grad():
                 captured_losses = compute_training_losses(model, dataset, args, device, context, loss_points=loss_points)
-            step = len(history)
+            step = max(row_step(row, index) for index, row in enumerate(history)) + 1 if history else start_step
             history.append(make_history_row(step, "lbfgs", lbfgs_optimizer, model, captured_losses))
+            maybe_capture_candidate_state(history[-1])
             if should_stop_early(
                 history,
                 window=int(getattr(args, "early_stop_window", 0)),
@@ -756,6 +850,14 @@ def train_model(model, dataset, args, device):
                 history[-1]["early_stop"] = True
                 break
 
+    args._training_state = {
+        "optimizer_state": optimizer.state_dict(),
+        "scheduler_state": scheduler.state_dict() if scheduler is not None else None,
+        "history": history,
+        "completed_steps": len(history),
+        "candidate_states": candidate_states,
+        "resume_mode": resume_mode,
+    }
     return history
 
 
@@ -769,14 +871,16 @@ def compute_full_unweighted_data_loss(model, dataset, device):
 
 def save_training_outputs(model, dataset, history, args, output_stem, device):
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
-    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+    output_dir = MODELS_DIR / output_stem
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-    model_path = MODELS_DIR / f"{output_stem}_pinn.pt"
-    history_path = MODELS_DIR / f"{output_stem}_history.json"
-    result_path = MODELS_DIR / f"{output_stem}_summary.json"
-    pred_heatmap_path = FIGURES_DIR / f"{output_stem}_pinn_pred_heatmap.png"
-    loss_curve_path = FIGURES_DIR / f"{output_stem}_pinn_loss_curve.png"
-    param_curve_path = FIGURES_DIR / f"{output_stem}_pinn_alpha_h_curve.png"
+    model_path = output_dir / f"{output_stem}_pinn.pt"
+    best_physical_model_path = output_dir / f"{output_stem}_best_physical_pinn.pt"
+    history_path = output_dir / f"{output_stem}_history.json"
+    result_path = output_dir / f"{output_stem}_summary.json"
+    pred_heatmap_path = output_dir / f"{output_stem}_pinn_pred_heatmap.png"
+    loss_curve_path = output_dir / f"{output_stem}_pinn_loss_curve.png"
+    param_curve_path = output_dir / f"{output_stem}_pinn_alpha_h_curve.png"
 
     coords = torch.tensor(np.column_stack([dataset["x_norm"], dataset["t_norm"]]), dtype=torch.float32, device=device)
     with torch.no_grad():
@@ -792,16 +896,33 @@ def save_training_outputs(model, dataset, history, args, output_stem, device):
     for row in history:
         stage = row.get("stage", "unknown")
         stage_counts[stage] = stage_counts.get(stage, 0) + 1
+    training_state = getattr(args, "_training_state", {}) or {}
+    best_physical_result = build_best_physical_result(history, args)
+    best_physical_state = None
+    if best_physical_result.get("found"):
+        best_physical_state = training_state.get("candidate_states", {}).get(int(best_physical_result["step"]))
+        if best_physical_state is None:
+            best_physical_result = dict(best_physical_result)
+            best_physical_result["found"] = False
+            best_physical_result["reason"] = "matching_model_state_not_available"
 
     torch.save(
         {
             "model_state": model.state_dict(),
-            "args": vars(args),
+            "optimizer_state": training_state.get("optimizer_state"),
+            "scheduler_state": training_state.get("scheduler_state"),
+            "history": history,
+            "completed_steps": len(history),
+            "resume_mode": training_state.get("resume_mode", "none"),
+            "best_physical_result": best_physical_result,
+            "best_physical_model_state": best_physical_state,
+            "args": public_args_dict(args),
             "model_config": {
                 "hidden_width": int(args.hidden_width),
                 "hidden_depth": int(args.hidden_depth),
                 "alpha_init": float(args.alpha_init),
                 "h_init": float(args.h_init),
+                "fixed_h": None if args.fixed_h is None else float(args.fixed_h),
             },
             "final_alpha_m2_s": alpha_m2_s,
             "final_h_w_m2k": h_w_m2k,
@@ -809,6 +930,22 @@ def save_training_outputs(model, dataset, history, args, output_stem, device):
         },
         model_path,
     )
+    if best_physical_result.get("found") and best_physical_state is not None:
+        torch.save(
+            {
+                "model_state": best_physical_state,
+                "args": public_args_dict(args),
+                "model_config": {
+                    "hidden_width": int(args.hidden_width),
+                    "hidden_depth": int(args.hidden_depth),
+                    "alpha_init": float(args.alpha_init),
+                    "h_init": float(args.h_init),
+                    "fixed_h": None if args.fixed_h is None else float(args.fixed_h),
+                },
+                "best_physical_result": best_physical_result,
+            },
+            best_physical_model_path,
+        )
     with open(history_path, "w", encoding="utf-8") as handle:
         json.dump(history, handle, ensure_ascii=False, indent=2)
 
@@ -821,10 +958,12 @@ def save_training_outputs(model, dataset, history, args, output_stem, device):
         "full_temperature_mse_c2": mse_c,
         "final_unweighted_data_loss": final_unweighted_data_loss,
         "output_stem": output_stem,
+        "output_dir": str(output_dir.resolve()),
         "mm_per_px": dataset["mm_per_px"],
         "calibration": dataset["calibration"],
         "alpha_m2_s": alpha_m2_s,
         "h_w_m2k": h_w_m2k,
+        "fixed_h_w_m2k": None if args.fixed_h is None else float(args.fixed_h),
         "thermal_conductivity_w_mk": conductivity,
         "material_preset": getattr(args, "material_preset", DEFAULT_MATERIAL_PRESET),
         "expected_k_min": None if getattr(args, "expected_k_min", None) is None else float(args.expected_k_min),
@@ -838,19 +977,11 @@ def save_training_outputs(model, dataset, history, args, output_stem, device):
         "initial_mode": args.initial_mode,
         "measured_initial_frame_count": int(args.measured_initial_frame_count),
         "right_bc_mode": args.right_bc_mode,
-        "training_preset": getattr(args, "training_preset", DEFAULT_TRAINING_PRESET),
-        "data_batch_size": int(args.data_batch_size),
-        "pde_sampling": args.pde_sampling,
-        "pde_hot_x_max": float(args.pde_hot_x_max),
-        "pde_early_t_max": float(args.pde_early_t_max),
-        "data_weighting": args.data_weighting,
-        "data_weighting_config": {
-            "lambda": float(args.data_weighting_lambda),
-            "temp_scale_c": float(args.data_weighting_temp_scale_c),
-            "max_extra": float(args.data_weighting_max_extra),
-        },
+        "objective_mode": "full_data_uniform_pde_unweighted",
         "optimizer": {
             "adam_lr": float(args.lr),
+            "alpha_lr": float(args.lr if args.alpha_lr is None else args.alpha_lr),
+            "h_lr": float(args.lr if args.h_lr is None else args.h_lr),
             "lr_scheduler": args.lr_scheduler,
             "lr_factor": float(args.lr_factor),
             "lr_patience": int(args.lr_patience),
@@ -862,6 +993,7 @@ def save_training_outputs(model, dataset, history, args, output_stem, device):
             "final_lr": float(history[-1]["lr"]) if history else float(args.lr),
         },
         "resume_checkpoint": str(Path(args.resume_checkpoint).resolve()) if args.resume_checkpoint else None,
+        "resume_mode": training_state.get("resume_mode", "none"),
         "early_stop": bool(history[-1].get("early_stop", False)) if history else False,
         "equation_used": "T_t = alpha*T_xx - 4h/(rho*cp*D)*(T-T_inf) - 4*epsilon*sigma/(rho*cp*D)*(T^4-T_inf^4)",
         "boundary_used": (
@@ -876,6 +1008,16 @@ def save_training_outputs(model, dataset, history, args, output_stem, device):
         "loss_model_note": "显式考虑轴向导热、侧向对流与辐射；辐射项按 Kelvin 计算。可见右边界不是物理末端时可关闭右端边界损失。",
     }
     summary["quality_checks"] = build_quality_checks(history, summary, args)
+    best_physical_summary = dict(best_physical_result)
+    if best_physical_summary.get("found"):
+        best_physical_summary["model_path"] = str(best_physical_model_path.resolve())
+    summary["best_physical"] = best_physical_summary
+    if summary["quality_checks"]["recommended_for_reporting"]:
+        summary["recommended_result_source"] = "final"
+    elif best_physical_summary.get("found"):
+        summary["recommended_result_source"] = "best_physical"
+    else:
+        summary["recommended_result_source"] = "rejected"
     if summary["quality_checks"]["warnings"]:
         print("结果质量警告:", "; ".join(summary["quality_checks"]["warnings"]))
     with open(result_path, "w", encoding="utf-8") as handle:
@@ -926,6 +1068,7 @@ def save_training_outputs(model, dataset, history, args, output_stem, device):
 
     return {
         "model": model_path,
+        **({"best_physical_model": best_physical_model_path} if best_physical_result.get("found") else {}),
         "history": history_path,
         "summary": result_path,
         "loss_curve": loss_curve_path,
@@ -947,10 +1090,13 @@ def main():
         hidden_depth=args.hidden_depth,
         alpha_init=args.alpha_init,
         h_init=args.h_init,
+        fixed_h=args.fixed_h,
     )
     if args.resume_checkpoint:
         checkpoint_metadata = load_checkpoint_into_model(model, args.resume_checkpoint, device)
+        args._resume_metadata = checkpoint_metadata
         print("loaded checkpoint:", Path(args.resume_checkpoint).expanduser().resolve())
+        print("resume_mode:", checkpoint_metadata.get("resume_mode"))
         if checkpoint_metadata.get("model_config"):
             print("checkpoint model_config:", checkpoint_metadata["model_config"])
 

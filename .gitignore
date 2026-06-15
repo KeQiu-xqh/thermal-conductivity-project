@@ -1,0 +1,6 @@
+__pycache__/
+*.py[cod]
+
+data/derived/synthetic_pinn/
+outputs/synthetic_pinn/
+outputs/models/synthetic_*/
