@@ -36,6 +36,12 @@ class SweepConfigTests(unittest.TestCase):
         self.assertIn("data1003", task.task_id)
         self.assertIn("pinn42", task.task_id)
 
+    def test_config_loader_accepts_utf8_bom_from_windows_powershell(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "config.json"
+            path.write_text('{"schema_version": 1}', encoding="utf-8-sig")
+            self.assertEqual(load_config(path)["schema_version"], 1)
+
 
 class SweepRunnerTests(unittest.TestCase):
     def setUp(self):

@@ -41,7 +41,7 @@ class SweepTask:
 
 
 def load_config(path):
-    with open(Path(path), "r", encoding="utf-8") as handle:
+    with open(Path(path), "r", encoding="utf-8-sig") as handle:
         return json.load(handle)
 
 
