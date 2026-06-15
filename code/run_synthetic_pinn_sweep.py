@@ -64,6 +64,12 @@ def stable_config_hash(config):
     return hashlib.sha256(encoded).hexdigest()[:12]
 
 
+def build_output_stem(batch_id, task):
+    safe_batch = "".join(character if character.isalnum() else "_" for character in batch_id)
+    digest = hashlib.sha256(f"{batch_id}|{task.task_id}".encode("utf-8")).hexdigest()[:12]
+    return f"synthetic_{safe_batch[:12]}_{task.material}_{digest}"
+
+
 def build_pinn_command(task, config, observations_path, output_stem):
     material = config["materials"][task.material]
     physics = config["physics"]
@@ -168,6 +174,8 @@ def decide_task_action(task_dir, config_hash):
     summary_path = status.get("summary_path")
     if status.get("state") == "completed" and summary_path and Path(summary_path).exists():
         return "skip"
+    if status.get("state") == "running" and summary_path and Path(summary_path).exists():
+        return "recover"
     return "run"
 
 
@@ -193,6 +201,16 @@ def run_task(task, config, config_path, batch_id):
     action = decide_task_action(task_dir, config_digest)
     if action == "skip":
         return {"task_id": task.task_id, "state": "skipped"}
+    if action == "recover":
+        with open(task_dir / "status.json", "r", encoding="utf-8") as handle:
+            previous = json.load(handle)
+        recovered_fields = {
+            key: value
+            for key, value in previous.items()
+            if key not in {"state", "updated_at"}
+        }
+        write_status(task_dir, "completed", **recovered_fields)
+        return {"task_id": task.task_id, "state": "recovered"}
     if action == "new_batch":
         raise RuntimeError(
             f"Task {task.task_id} already exists with another config hash; use a new batch id"
@@ -207,7 +225,7 @@ def run_task(task, config, config_path, batch_id):
         task.noise_sigma_c,
         task.data_seed,
     )
-    output_stem = f"synthetic_{batch_id}_{task.task_id}"
+    output_stem = build_output_stem(batch_id, task)
     summary_path = MODELS_DIR / output_stem / f"{output_stem}_summary.json"
     log_path = task_dir / "train.log"
     command = build_pinn_command(task, config, observations_path, output_stem)

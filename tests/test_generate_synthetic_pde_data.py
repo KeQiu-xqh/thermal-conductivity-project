@@ -2,6 +2,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 
@@ -15,6 +16,7 @@ from generate_synthetic_pde_data import (
     MaterialConfig,
     PhysicsConfig,
     SamplingConfig,
+    atomic_savez_compressed,
     build_observation_dataset,
     left_boundary_c,
     solve_forward_field,
@@ -79,6 +81,21 @@ class ForwardSolverTests(unittest.TestCase):
 
 
 class SyntheticExportTests(unittest.TestCase):
+    def test_atomic_savez_supports_concurrent_writers(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "shared.npz"
+
+            def write(value):
+                atomic_savez_compressed(path, values=np.full((64, 64), value))
+
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                list(executor.map(write, (1.0, 2.0)))
+
+            with np.load(path) as data:
+                values = data["values"]
+            self.assertEqual(values.shape, (64, 64))
+            self.assertTrue(np.all(values == values[0, 0]))
+
     @classmethod
     def setUpClass(cls):
         cls.solution = solve_forward_field(make_material(), make_physics(), make_sampling(0.75), 10.0)

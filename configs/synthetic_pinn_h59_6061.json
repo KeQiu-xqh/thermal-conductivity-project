@@ -31,17 +31,19 @@
   "refinement": {
     "pinn_seeds": [42, 43, 44, 45, 46],
     "near_error_threshold_margin": 0.03,
-    "best_cases_per_material": 3
+    "best_cases_per_material": 3,
+    "boundary_cases_per_material": 2,
+    "unstable_cases_per_material": 1
   },
   "pinn": {
-    "epochs": 1000,
+    "epochs": 1500,
     "lr": 0.001,
     "alpha_lr": 0.002,
     "h_lr": 0.001,
     "hidden_width": 64,
     "hidden_depth": 4,
     "collocation_points": 1024,
-    "data_weight": 10.0,
+    "data_weight": 20.0,
     "pde_weight": 1.0,
     "bc_weight": 3.0,
     "ic_weight": 3.0,

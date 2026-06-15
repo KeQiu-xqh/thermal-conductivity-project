@@ -84,47 +84,142 @@ def _base_case_key(row):
     )
 
 
+def aggregate_multiseed_cases(rows):
+    grouped = defaultdict(list)
+    for row in rows:
+        grouped[_base_case_key(row)].append(row)
+    summaries = []
+    for key, case_rows in sorted(grouped.items()):
+        material, time_s, length_mm, noise, data_seed = key
+        errors = np.asarray(
+            [float(row["k_relative_error"]) for row in case_rows],
+            dtype=float,
+        )
+        estimates = np.asarray([float(row["k_est"]) for row in case_rows], dtype=float)
+        stable_within_count = sum(
+            bool(row.get("blind_stability_pass", False))
+            and float(row["k_relative_error"]) <= 0.20
+            for row in case_rows
+        )
+        median_error = float(np.median(errors))
+        summaries.append(
+            {
+                "material": material,
+                "time_length_s": time_s,
+                "space_length_mm": length_mm,
+                "noise_sigma_c": noise,
+                "data_seed": data_seed,
+                "seed_count": len(case_rows),
+                "median_k_est": float(np.median(estimates)),
+                "median_k_relative_error": median_error,
+                "k_relative_error_iqr": float(
+                    np.percentile(errors, 75) - np.percentile(errors, 25)
+                ),
+                "max_k_relative_error": float(np.max(errors)),
+                "stable_count": sum(
+                    bool(row.get("blind_stability_pass", False)) for row in case_rows
+                ),
+                "stable_within_20_percent_count": stable_within_count,
+                "suitable_for_pinn": (
+                    len(case_rows) >= 5
+                    and median_error <= 0.10
+                    and stable_within_count >= 4
+                ),
+            }
+        )
+    return summaries
+
+
 def select_refinement_cases(rows, config):
     refinement = config["refinement"]
     margin = float(refinement["near_error_threshold_margin"])
     reasons = defaultdict(set)
     valid_rows = [row for row in rows if math.isfinite(float(row["k_relative_error"]))]
-    for row in valid_rows:
-        error = float(row["k_relative_error"])
-        key = _base_case_key(row)
-        if abs(error - 0.10) <= margin:
-            reasons[key].add("near_10_percent")
-        if abs(error - 0.20) <= margin:
-            reasons[key].add("near_20_percent")
-        if not row.get("blind_stability_pass", False):
-            reasons[key].add("unstable_or_rejected")
-
     grouped = defaultdict(list)
+    unstable_grouped = defaultdict(list)
     for row in valid_rows:
-        if row.get("blind_stability_pass", False):
-            grouped[row["material"]].append(row)
+        grouped[row["material"]].append(row)
+        if not row.get("blind_stability_pass", False):
+            unstable_grouped[row["material"]].append(row)
+
+    for material, material_rows in grouped.items():
+        for threshold, reason in ((0.10, "near_10_percent"), (0.20, "near_20_percent")):
+            candidates = [
+                row
+                for row in material_rows
+                if abs(float(row["k_relative_error"]) - threshold) <= margin
+            ]
+            if candidates:
+                selected = min(
+                    candidates,
+                    key=lambda row: (
+                        abs(float(row["k_relative_error"]) - threshold),
+                        _base_case_key(row),
+                    ),
+                )
+                reasons[_base_case_key(selected)].add(reason)
+
     for material, material_rows in grouped.items():
         best_count = int(refinement["best_cases_per_material"])
-        for row in sorted(material_rows, key=lambda item: item["k_relative_error"])[:best_count]:
+        stable_rows = [row for row in material_rows if row.get("blind_stability_pass", False)]
+        for row in sorted(stable_rows, key=lambda item: item["k_relative_error"])[:best_count]:
             reasons[_base_case_key(row)].add("best_case")
+
+    unstable_count = int(refinement.get("unstable_cases_per_material", 1))
+    for material, material_rows in unstable_grouped.items():
+        for row in sorted(
+            material_rows,
+            key=lambda item: (-float(item["k_relative_error"]), _base_case_key(item)),
+        )[:unstable_count]:
+            reasons[_base_case_key(row)].add("unstable_or_rejected")
 
     by_slice = defaultdict(list)
     for row in valid_rows:
         by_slice[(row["material"], row["noise_sigma_c"], row["data_seed"])].append(row)
-    for slice_rows in by_slice.values():
-        for first in slice_rows:
-            for second in slice_rows:
-                adjacent_time = first["space_length_mm"] == second["space_length_mm"] and abs(
-                    first["time_length_s"] - second["time_length_s"]
-                ) > 0
-                adjacent_space = first["time_length_s"] == second["time_length_s"] and abs(
-                    first["space_length_mm"] - second["space_length_mm"]
-                ) > 0
-                if not (adjacent_time or adjacent_space):
-                    continue
-                if (first["k_relative_error"] <= 0.20) != (second["k_relative_error"] <= 0.20):
-                    reasons[_base_case_key(first)].add("success_failure_boundary")
-                    reasons[_base_case_key(second)].add("success_failure_boundary")
+    boundary_candidates = defaultdict(list)
+    for (material, _noise, _data_seed), slice_rows in by_slice.items():
+        lookup = {
+            (float(row["time_length_s"]), float(row["space_length_mm"])): row
+            for row in slice_rows
+        }
+        times = sorted({key[0] for key in lookup})
+        lengths = sorted({key[1] for key in lookup})
+        neighbor_pairs = []
+        for time_s in times:
+            for first_length, second_length in zip(lengths, lengths[1:]):
+                neighbor_pairs.append(
+                    (lookup.get((time_s, first_length)), lookup.get((time_s, second_length)))
+                )
+        for length_mm in lengths:
+            for first_time, second_time in zip(times, times[1:]):
+                neighbor_pairs.append(
+                    (lookup.get((first_time, length_mm)), lookup.get((second_time, length_mm)))
+                )
+        for first, second in neighbor_pairs:
+            if first is None or second is None:
+                continue
+            first_error = float(first["k_relative_error"])
+            second_error = float(second["k_relative_error"])
+            if (first_error <= 0.20) == (second_error <= 0.20):
+                continue
+            score = abs(first_error - second_error)
+            boundary_candidates[material].append((score, first))
+            boundary_candidates[material].append((score, second))
+
+    boundary_count = int(refinement.get("boundary_cases_per_material", 2))
+    for material, candidates in boundary_candidates.items():
+        seen = set()
+        for _score, row in sorted(
+            candidates,
+            key=lambda item: (-item[0], _base_case_key(item[1])),
+        ):
+            key = _base_case_key(row)
+            if key in seen:
+                continue
+            reasons[key].add("success_failure_boundary")
+            seen.add(key)
+            if len(seen) >= boundary_count:
+                break
 
     records = []
     for key, reason_set in sorted(reasons.items()):
@@ -272,6 +367,8 @@ def main():
     analysis_dir = SYNTHETIC_OUTPUT_ROOT / args.batch_id / "analysis"
     analysis_dir.mkdir(parents=True, exist_ok=True)
     write_csv(analysis_dir / "case_results.csv", rows)
+    multiseed = aggregate_multiseed_cases(rows)
+    write_csv(analysis_dir / "multiseed_summary.csv", multiseed)
     refinement = select_refinement_cases(rows, config)
     with open(analysis_dir / "refinement_cases.json", "w", encoding="utf-8") as handle:
         json.dump(refinement, handle, ensure_ascii=False, indent=2)
@@ -283,6 +380,10 @@ def main():
             float(np.median([row["k_relative_error"] for row in rows])) if rows else None
         ),
         "refinement_task_count": len(refinement),
+        "multiseed_case_count": len(multiseed),
+        "multiseed_suitable_case_count": sum(
+            bool(row["suitable_for_pinn"]) for row in multiseed
+        ),
     }
     with open(analysis_dir / "summary.json", "w", encoding="utf-8") as handle:
         json.dump(summary, handle, ensure_ascii=False, indent=2)

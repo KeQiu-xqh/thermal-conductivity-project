@@ -149,4 +149,19 @@ python code\run_synthetic_pinn_sweep.py --config configs\synthetic_pinn_h59_6061
 python code\analyze_synthetic_sweep.py --config configs\synthetic_pinn_h59_6061.json --batch-id baseline_v1
 ```
 
-正式推荐配置固定 `h=10 W/(m^2*K)`，使用 `alpha_lr=2e-3` 和 1000 步。联合反演 `h` 仅作诊断，必须经过多初值验证后才能报告。详细结果见 `docs/10-合成数据PINN验证报告.md`。
+正式推荐配置固定 `h=10 W/(m^2*K)`，使用 `1500 epochs`、`alpha_lr=2e-3`、
+`64x4` 网络、`1024` 个 PDE 配点和 `data_weight=20`。联合反演 `h` 仅作诊断，
+必须经过多初值验证后才能报告。
+
+完整验证已经运行 `300/300` 个粗筛任务及 `60/60` 个五种子复筛任务：
+
+```powershell
+python code\run_synthetic_pinn_sweep.py --config configs\synthetic_pinn_h59_6061.json --batch-id final_v2 --mode coarse --max-workers 2
+python code\analyze_synthetic_sweep.py --config configs\synthetic_pinn_h59_6061.json --batch-id final_v2
+
+python code\run_synthetic_pinn_sweep.py --config configs\synthetic_pinn_h59_6061.json --batch-id final_v2_refinement --mode refinement --refinement-file outputs\synthetic_pinn\final_v2\analysis\refinement_cases.json --max-workers 2
+python code\analyze_synthetic_sweep.py --config configs\synthetic_pinn_h59_6061.json --batch-id final_v2_refinement
+```
+
+超参数消融入口为 `code/tune_synthetic_pinn_hyperparameters.py`，详细结论见
+`docs/10-合成数据PINN验证报告.md`。

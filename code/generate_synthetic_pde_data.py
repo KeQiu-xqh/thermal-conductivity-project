@@ -1,6 +1,8 @@
 import argparse
 import hashlib
 import json
+import os
+import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -11,6 +13,46 @@ from scipy.interpolate import RegularGridInterpolator
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SYNTHETIC_DATA_ROOT = PROJECT_ROOT / "data" / "derived" / "synthetic_pinn"
+
+
+def atomic_savez_compressed(path, **arrays):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            dir=path.parent,
+            prefix=f".{path.stem}.",
+            suffix=".npz",
+            delete=False,
+        ) as temporary:
+            temporary_path = Path(temporary.name)
+        np.savez_compressed(temporary_path, **arrays)
+        os.replace(temporary_path, path)
+    finally:
+        if temporary_path is not None and temporary_path.exists():
+            temporary_path.unlink()
+
+
+def atomic_write_json(path, payload):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.stem}.",
+            suffix=".json",
+            delete=False,
+        ) as temporary:
+            temporary_path = Path(temporary.name)
+            json.dump(payload, temporary, ensure_ascii=False, indent=2)
+        os.replace(temporary_path, path)
+    finally:
+        if temporary_path is not None and temporary_path.exists():
+            temporary_path.unlink()
 
 
 @dataclass(frozen=True)
@@ -177,7 +219,7 @@ def write_synthetic_case(case_root, dataset, truth):
     observation_path = case_root / "observations.npz"
     truth_path = case_root / "truth.json"
     clean_path = case_root / "clean_observations.npz"
-    np.savez_compressed(
+    atomic_savez_compressed(
         observation_path,
         xt_grid_c=dataset["xt_grid_c"],
         time_axis_sec=dataset["time_axis_sec"],
@@ -186,9 +228,8 @@ def write_synthetic_case(case_root, dataset, truth):
         boundary_temperature_c=dataset["boundary_temperature_c"],
         far_end_temperature_c=dataset["far_end_temperature_c"],
     )
-    np.savez_compressed(clean_path, clean_xt_grid_c=dataset["clean_xt_grid_c"])
-    with open(truth_path, "w", encoding="utf-8") as handle:
-        json.dump(truth, handle, ensure_ascii=False, indent=2)
+    atomic_savez_compressed(clean_path, clean_xt_grid_c=dataset["clean_xt_grid_c"])
+    atomic_write_json(truth_path, truth)
     return observation_path, truth_path
 
 
@@ -223,21 +264,25 @@ def generate_case(config, batch_id, material_name, duration_s, length_mm, noise_
     cache_dir = batch_root / "forward_fields"
     cache_dir.mkdir(parents=True, exist_ok=True)
     cache_path = cache_dir / f"{material_name}_{forward_hash}.npz"
+    solution = None
     if cache_path.exists():
-        with np.load(cache_path) as cached:
-            solution = ForwardSolution(
-                time_s=cached["time_s"],
-                x_m=cached["x_m"],
-                temperature_c=cached["temperature_c"],
-            )
-    else:
+        try:
+            with np.load(cache_path) as cached:
+                solution = ForwardSolution(
+                    time_s=cached["time_s"],
+                    x_m=cached["x_m"],
+                    temperature_c=cached["temperature_c"],
+                )
+        except (EOFError, OSError, ValueError, KeyError):
+            cache_path.unlink(missing_ok=True)
+    if solution is None:
         solution = solve_forward_field(
             material,
             physics,
             sampling,
             max(config["coarse_scan"]["time_lengths_s"]),
         )
-        np.savez_compressed(
+        atomic_savez_compressed(
             cache_path,
             time_s=solution.time_s,
             x_m=solution.x_m,
@@ -278,9 +323,8 @@ def generate_case(config, batch_id, material_name, duration_s, length_mm, noise_
     truth_dir.mkdir(parents=True, exist_ok=True)
     truth_path = truth_dir / f"{case_id}.json"
     clean_path = truth_dir / f"{case_id}_clean.npz"
-    with open(truth_path, "w", encoding="utf-8") as handle:
-        json.dump(truth, handle, ensure_ascii=False, indent=2)
-    np.savez_compressed(clean_path, clean_xt_grid_c=dataset["clean_xt_grid_c"])
+    atomic_write_json(truth_path, truth)
+    atomic_savez_compressed(clean_path, clean_xt_grid_c=dataset["clean_xt_grid_c"])
     return observation_path, truth_path
 
 
