@@ -1,0 +1,79 @@
+{
+  "defaults": {
+    "diameter_mm": 8.0,
+    "emissivity": 0.95,
+    "sigma_sb": 5.67e-8,
+    "conductivity_bounds": [
+      20.0,
+      350.0
+    ],
+    "h_bounds": [
+      0.0,
+      30.0
+    ],
+    "right_bc_modes": [
+      "none",
+      "robin"
+    ],
+    "initial_frame_count": 5,
+    "max_time_s": 120.0,
+    "train_fraction": 0.7,
+    "fit_time_stride": 1
+  },
+  "cases": [
+    {
+      "case_name": "h59_20260605_160328",
+      "material": "H59",
+      "dataset_path": "data/derived/20260605_h59_100c_160328_x12_56_calib99mm/2000.0.0.000000--20260605-160328_rod_xt_data.npz",
+      "rho": 8500.0,
+      "cp": 380.0,
+      "t_inf_c": 24.5,
+      "reference_k_w_mk": 110.0
+    },
+    {
+      "case_name": "h59_20260608_144924",
+      "material": "H59",
+      "dataset_path": "data/derived/20260608_h59_100c_144924_x12_68_start0_calib10590mm/2000.0.0.000000--20260608-144924_rod_xt_data.npz",
+      "rho": 8500.0,
+      "cp": 380.0,
+      "t_inf_c": 24.0,
+      "reference_k_w_mk": 110.0
+    },
+    {
+      "case_name": "h59_20260608_155612",
+      "material": "H59",
+      "dataset_path": "data/derived/20260608_h59_100c_155612_x12_76_y28_32_start0_calib1500mm/2000.0.0.000000--20260608-155612_rod_xt_data.npz",
+      "rho": 8500.0,
+      "cp": 380.0,
+      "t_inf_c": 24.0,
+      "reference_k_w_mk": 110.0
+    },
+    {
+      "case_name": "6061_20260522_run02",
+      "material": "6061",
+      "dataset_path": "data/derived/real_validation_v1/6061_20260522_run02_120s/thermal90-20260522-run02_rod_xt_data.npz",
+      "rho": 2700.0,
+      "cp": 900.0,
+      "t_inf_c": 25.0,
+      "reference_k_w_mk": 167.0
+    },
+    {
+      "case_name": "6061_20260528_run01",
+      "material": "6061",
+      "dataset_path": "data/derived/real_validation_v1/6061_20260528_run01_120s/thermal90-20260528-run01_rod_xt_data.npz",
+      "rho": 2700.0,
+      "cp": 900.0,
+      "t_inf_c": 21.7,
+      "reference_k_w_mk": 167.0
+    },
+    {
+      "case_name": "6061_20260608_162125",
+      "material": "6061",
+      "dataset_path": "data/derived/20260608_6061_100c_162125_x12_70_y28_32_start0_calib1570mm/2000.0.0.000000--20260608-162125_rod_xt_data.npz",
+      "rho": 2700.0,
+      "cp": 900.0,
+      "t_inf_c": 24.0,
+      "reference_k_w_mk": 167.0
+    }
+  ]
+}

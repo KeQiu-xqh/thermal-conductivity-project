@@ -104,12 +104,31 @@ T_t = alpha*T_xx
 - `--lbfgs-steps`
 - `--early-stop-window`
 
+### 5. 真实实验数据确定性反演
+
+脚本：[`code/estimate_conductivity_from_experiment.py`](/C:/Users/28146/Desktop/thermal-conductivity-project/code/estimate_conductivity_from_experiment.py)
+
+真实热像全长 ROI 容易跨过支架和二维换热区。当前正式估计入口会扫描加热端
+`30/40/50/60 mm` 子域，使用双实测边界并固定 `h=10`，只反演 `k`：
+
+```powershell
+python code\estimate_conductivity_from_experiment.py `
+  data\derived\<case>\<stem>_rod_xt_data.npz `
+  --output-json outputs\experimental_estimator_v1\<case>.json `
+  --material h59 `
+  --t-inf-c 24
+```
+
+支持材料仅为 `h59` 和 `6061`。必须先检查输出中的
+`recommended_for_reporting`；为 `false` 时应拒绝该录像。
+
 ## 当前文档入口
 
 - 实验复现流程：[`docs/07-实验复现操作手册.md`](/C:/Users/28146/Desktop/thermal-conductivity-project/docs/07-%E5%AE%9E%E9%AA%8C%E5%A4%8D%E7%8E%B0%E6%93%8D%E4%BD%9C%E6%89%8B%E5%86%8C.md)
 - 数据记录日志：[`docs/05-数据记录日志.md`](/C:/Users/28146/Desktop/thermal-conductivity-project/docs/05-%E6%95%B0%E6%8D%AE%E8%AE%B0%E5%BD%95%E6%97%A5%E5%BF%97.md)
 - 实验进度汇总：[`docs/06-实验进度.md`](/C:/Users/28146/Desktop/thermal-conductivity-project/docs/06-%E5%AE%9E%E9%AA%8C%E8%BF%9B%E5%BA%A6.md)
 - 当前建模分析：[`docs/08-当前建模分析.md`](/C:/Users/28146/Desktop/thermal-conductivity-project/docs/08-%E5%BD%93%E5%89%8D%E5%BB%BA%E6%A8%A1%E5%88%86%E6%9E%90.md)
+- 真实数据修正报告：[`docs/13-真实实验数据热导率反演修正与验证报告.md`](/C:/Users/28146/Desktop/thermal-conductivity-project/docs/13-%E7%9C%9F%E5%AE%9E%E5%AE%9E%E9%AA%8C%E6%95%B0%E6%8D%AE%E7%83%AD%E5%AF%BC%E7%8E%87%E5%8F%8D%E6%BC%94%E4%BF%AE%E6%AD%A3%E4%B8%8E%E9%AA%8C%E8%AF%81%E6%8A%A5%E5%91%8A.md)
 - 理论建模问题：[`docs/理论建模问题.md`](/C:/Users/28146/Desktop/thermal-conductivity-project/docs/%E7%90%86%E8%AE%BA%E5%BB%BA%E6%A8%A1%E9%97%AE%E9%A2%98.md)
 - 树莓派使用笔记：[`docs/02-树莓派使用笔记.md`](/C:/Users/28146/Desktop/thermal-conductivity-project/docs/02-%E6%A0%91%E8%8E%93%E6%B4%BE%E4%BD%BF%E7%94%A8%E7%AC%94%E8%AE%B0.md)
 - Linux 命令备忘：[`docs/04-linux常用命令.md`](/C:/Users/28146/Desktop/thermal-conductivity-project/docs/04-linux%E5%B8%B8%E7%94%A8%E5%91%BD%E4%BB%A4.md)
@@ -128,7 +147,9 @@ T_t = alpha*T_xx
 
 - `6061` 当前主结果仍优先采用两组近距离 `100 C` 黑体化数据。
 - `304` 当前更适合作为装置局限性诊断数据。
-- `H59` 当前结果大致收敛到 `90~100 W/(m*K)` 量级。
+- H59 三份可用数据的新确定性子域估计平均为 `107.02 W/(m*K)`。
+- 6061 两份可用数据的新确定性子域估计平均为 `159.08 W/(m*K)`。
+- 真实数据的 PINN 温度 MSE 不能单独证明热导率正确；正式判断优先使用新的子域估计器。
 - 远距离完整入镜时，右端 `x>70` 可能混入铁架台旋钮，不能默认把整段 `x=0~80` 都当成棒身。
 
 ## 合成数据 PINN 验证

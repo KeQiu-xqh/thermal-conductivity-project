@@ -309,3 +309,250 @@
   - stable mini-batch `k=93.38`: accepted
   - experimental/mixed-weighted `k=71.10`: rejected for out-of-range `k`
 - Current rule for single inversion: do not report a run as a formal result unless `quality_checks.recommended_for_reporting=true`.
+
+## 2026-06-08 PINN formal script cleanup
+
+- `code/train_pinn_1d.py` has been reduced back to one formal inverse objective:
+  - full observed data loss
+  - uniform PDE collocation
+  - no data reweighting
+- Removed the experimental training controls from the active script:
+  - `--training-preset`
+  - `--data-batch-size`
+  - `--pde-sampling`
+  - `--data-weighting`
+- Deleted the duplicate/experimental `code/train_pinn_1d_final.py`.
+- Current formal rerun command should omit the removed options, for example:
+  `python code\train_pinn_1d.py data\derived\20260605_h59_100c_160328_x12_56_calib99mm\2000.0.0.000000--20260605-160328_rod_xt_data.npz --epochs 2000 --material-preset h59 --diameter-mm 8 --t-inf-c 24.5 --output-stem 20260605_h59_100c_160328_x12_56_formal`
+- Keep the previous mixed-PDE / delta-initial results as historical ablations only; they are not available in the active formal script.
+
+## 2026-06-08 PINN output layout
+
+- `code/train_pinn_1d.py` now writes every inversion run into one grouped folder:
+  - `outputs/models/<output_stem>/`
+- The grouped folder contains:
+  - `<output_stem>_pinn.pt`
+  - `<output_stem>_history.json`
+  - `<output_stem>_summary.json`
+  - `<output_stem>_pinn_loss_curve.png`
+  - `<output_stem>_pinn_alpha_h_curve.png`
+  - `<output_stem>_pinn_pred_heatmap.png`
+- `summary.json` includes `output_dir`, so later scripts can find all artifacts from one run without searching the flat `outputs/models` and `outputs/figures` directories.
+
+## 2026-06-08 H59@100 C 14:49 batch prepared
+
+- Raw file: `data/raw/2000.0.0.000000--20260608-144924.dat`
+- User-recorded timing: `14:49:21` to `14:57:00`, `2779` frames
+  - derived `fps = 6.05446623093682`
+- Manual scale:
+  - known distance: `105.90 mm`
+  - video x: `20` to `288`
+  - video/raw scale: `4x`
+  - `mm_per_px = 105.90 / ((288 - 20) / 4) = 1.5805970149253732`
+- Material parameters:
+  - H59 brass, `rho = 8500 kg/m3`, `cp = 380 J/(kg*K)`, diameter `8 mm`, `T_inf = 24 C`
+- Rod is slightly tilted, about `1 px` from start to end; current horizontal band is still acceptable for first-pass ROI.
+- Differential inspection found the rod response centered near `y = 31`, mainly spanning about `y = 29~34`.
+- Prepared ROI datasets:
+  - main: `data/derived/20260608_h59_100c_144924_x12_68_calib10590mm`
+  - full-start main: `data/derived/20260608_h59_100c_144924_x12_68_start0_calib10590mm`
+  - sensitivity: `data/derived/20260608_h59_100c_144924_x10_68_calib10590mm`
+  - sensitivity: `data/derived/20260608_h59_100c_144924_x12_70_calib10590mm`
+- Main ROI is `x_min=12, x_max=68, y_min=29, y_max=34`, heat side `left`.
+- For this batch, prefer the `start0` main dataset first because frame 0 still captures a cold rod state; keep the default `data-start-frame=250` dataset as a comparison.
+- Next step: run formal PINN on the `start0` main ROI first, then compare sensitivity runs if the result passes quality checks.
+
+## 2026-06-08 H59@100 C 14:49 start0 formal PINN
+
+- Dataset:
+  `data/derived/20260608_h59_100c_144924_x12_68_start0_calib10590mm/2000.0.0.000000--20260608-144924_rod_xt_data.npz`
+- Command:
+  `python code/train_pinn_1d.py ... --epochs 2000 --material-preset h59 --diameter-mm 8 --t-inf-c 24 --output-stem 20260608_h59_100c_144924_x12_68_start0_formal`
+- Output folder:
+  `outputs/models/20260608_h59_100c_144924_x12_68_start0_formal`
+- Result:
+  - `k = 21.8248 W/(m*K)`
+  - `alpha = 6.7569e-6 m^2/s`
+  - `h = 10.0226 W/(m^2*K)`
+  - `full_temperature_mse_c2 = 0.08348`
+  - `completed_steps = 2000`
+- Quality checks rejected this result:
+  - `recommended_for_reporting = false`
+  - warnings: `tail_parameters_not_stable`, `thermal_conductivity_outside_expected_material_range`
+  - `alpha_tail_rel_range = 0.1373`, above the `0.05` threshold
+- Interpretation:
+  - Do not report `21.8 W/(m*K)` as the H59 conductivity.
+  - The parameter curve shows alpha continuing to fall through 2000 steps rather than converging.
+  - Next diagnostic should compare the default `data-start-frame=250` dataset and ROI sensitivity datasets before extending or changing the model.
+
+## 2026-06-08 H59@100 C 14:49 start0 ROI sensitivity
+
+- Same batch, same `y=29~34`, `fps=6.05446623093682`, `mm_per_px=1.5805970149253732`, H59 material preset.
+- Ran 2000 Adam steps for additional ROI variants:
+  - `x=12~56`: `k = 20.24 W/(m*K)`, `alpha = 6.2673e-6`, `h = 10.008`, `MSE = 0.08047`
+  - `x=12~68`: `k = 21.82 W/(m*K)`, `alpha = 6.7569e-6`, `h = 10.023`, `MSE = 0.08348`
+  - `x=6~70`: `k = 15.82 W/(m*K)`, `alpha = 4.8975e-6`, `h = 10.014`, `MSE = 0.08791`
+- All three were rejected by quality checks:
+  - `tail_parameters_not_stable`
+  - `thermal_conductivity_outside_expected_material_range`
+- Interpretation:
+  - Cropping the right side more aggressively did not recover H59-level conductivity.
+  - Including more left/right boundary region made the inferred conductivity lower.
+  - This strengthens the diagnosis that the batch's temperature evolution is not compatible with the current one-dimensional free-rod model as a formal H59 measurement.
+
+## 2026-06-08 H59@100 C 14:49 start250 check
+
+- Dataset:
+  `data/derived/20260608_h59_100c_144924_x12_68_calib10590mm/2000.0.0.000000--20260608-144924_rod_xt_data.npz`
+- Command:
+  `python code/train_pinn_1d.py ... --epochs 2000 --material-preset h59 --diameter-mm 8 --t-inf-c 24 --output-stem 20260608_h59_100c_144924_x12_68_start250_formal`
+- Result:
+  - `k = 22.54 W/(m*K)`
+  - `alpha = 6.9791e-6 m^2/s`
+  - `h = 10.0194 W/(m^2*K)`
+  - `MSE = 0.08903`
+  - `alpha_tail_rel_range = 0.1474`
+- Quality checks rejected it with:
+  - `tail_parameters_not_stable`
+  - `thermal_conductivity_outside_expected_material_range`
+- Interpretation:
+  - Removing the first 250 frames did not recover H59-level conductivity.
+  - The low result is therefore not mainly caused by early cold-state weighting.
+  - Treat this 14:49 batch as unsuitable for a formal H59 conductivity result under the current one-dimensional model.
+
+## 2026-06-08 PINN code regression check
+
+- To check whether the low `20260608 14:49` H59 result was caused by a code regression, the current `code/train_pinn_1d.py` was rerun on the older accepted H59 dataset:
+  `data/derived/20260605_h59_100c_160328_x12_56_calib99mm/2000.0.0.000000--20260605-160328_rod_xt_data.npz`
+- Command output:
+  - `k = 94.6036 W/(m*K)`
+  - `alpha = 2.9289e-5 m^2/s`
+  - `h = 10.4840 W/(m^2*K)`
+  - `MSE = 0.09758`
+  - `quality_checks.recommended_for_reporting = true`
+- Interpretation:
+  - The active PINN training path can still reproduce an accepted H59-scale result.
+  - The low `20260608 14:49` results are unlikely to be caused by the core training code being broken.
+  - Remaining likely causes are dataset/ROI/boundary condition incompatibility with the current one-dimensional model, or a preprocessing assumption specific to this batch.
+
+## 2026-06-08 H59@100 C 15:56 batch
+
+- Raw file: `data/raw/2000.0.0.000000--20260608-155612.dat`
+- User-recorded timing: `15:56:12` to `16:06:25`, `3727` frames
+  - derived `fps = 6.079934747145187`
+- Manual scale: `mm_per_px = 1.5`
+- Material/run parameters:
+  - H59 brass, diameter `8 mm`, `T_inf = 24 C`, hot plate setpoint `100 C`
+  - user also recorded rod length `150 mm`, SK8 diameter `8 mm`, exposed length `136 mm`
+- Differential inspection:
+  - rod response centered at `y=30~31`
+  - preferred vertical band `y=28~32`
+  - left `x=0~10` is a strong hot-end transition region and should be avoided for formal ROI
+- Prepared datasets:
+  - main: `data/derived/20260608_h59_100c_155612_x12_76_y28_32_start0_calib1500mm`
+  - right-cropped sensitivity: `data/derived/20260608_h59_100c_155612_x12_70_y28_32_start0_calib1500mm`
+  - start-frame sensitivity prepared but not yet trained: `data/derived/20260608_h59_100c_155612_x12_76_y28_32_start250_calib1500mm`
+- Formal 2000-step PINN results:
+  - `x=12~76, y=28~32, start0`: `k = 79.93 W/(m*K)`, `alpha = 2.4745e-5 m^2/s`, `h = 10.09 W/(m^2*K)`, `MSE = 0.09994`
+    - rejected by quality checks: `tail_parameters_not_stable`, `thermal_conductivity_outside_expected_material_range`
+    - `alpha_tail_rel_range = 0.0643`, slightly above the `0.05` threshold
+  - `x=12~70, y=28~32, start0`: `k = 74.82 W/(m*K)`, `alpha = 2.3165e-5 m^2/s`, `h = 10.08 W/(m^2*K)`, `MSE = 0.10200`
+    - rejected by quality checks: `thermal_conductivity_outside_expected_material_range`
+    - parameters were stable, but `k` remained below the H59 expected `80~120 W/(m*K)` range
+- Interpretation:
+  - This batch is much better than the 14:49 batch (`~16~23 W/(m*K)`) and recovers to the lower edge of the H59 range.
+  - The current best value is the main ROI `x=12~76`, about `79.9 W/(m*K)`, but it should not be reported as a formal accepted H59 result unless a follow-up run passes quality checks or repeated ROI/seed checks support it.
+
+### Continue from 2000-step checkpoint
+
+- Continued the main ROI from:
+  `outputs/models/20260608_h59_100c_155612_x12_76_y28_32_start0_formal/20260608_h59_100c_155612_x12_76_y28_32_start0_formal_pinn.pt`
+- New output folder:
+  `outputs/models/20260608_h59_100c_155612_x12_76_y28_32_start0_continue4000`
+- Result after the additional 2000 Adam steps:
+  - `k = 79.9982 W/(m*K)`
+  - `alpha = 2.4767e-5 m^2/s`
+  - `h = 8.1529 W/(m^2*K)`
+  - `MSE = 0.09781`
+  - `alpha_tail_rel_range = 0.0121`
+  - `h_tail_rel_range = 0.0347`
+- Quality checks:
+  - parameters are now stable
+  - the only remaining warning is `thermal_conductivity_outside_expected_material_range`, because `k=79.9982` is infinitesimally below the preset lower bound `80.0`
+- Interpretation:
+  - Continuing training confirmed the main ROI converges very close to `80 W/(m*K)`, not back to `~100 W/(m*K)`.
+  - Treat this as a stable lower-edge H59 result for this batch, while still noting it technically misses the strict preset threshold by rounding.
+
+## 2026-06-08 6061@100 C 16:21 batch and mini-batch PINN check
+
+- Raw file: `data/raw/2000.0.0.000000--20260608-162125.dat`
+- User-recorded timing: `16:21:25` to `16:25:30`, `1486` frames
+  - derived `fps = 6.0653061224489795`
+- Manual scale: `mm_per_px = 1.57`
+- User noted that `x>70` has support interference; formal ROI should not include columns above `70`.
+- Prepared formal ROI dataset:
+  `data/derived/20260608_6061_100c_162125_x12_70_y28_32_start0_calib1570mm`
+  - ROI: `x=12~70, y=28~32`, heat side left
+- Full-data formal script result on `x=12~70`:
+  - output: `outputs/models/20260608_6061_100c_162125_x12_70_y28_32_start0_formal`
+  - `k = 393.51 W/(m*K)`, `alpha = 1.6194e-4 m^2/s`, `h = 10.44 W/(m^2*K)`
+  - `MSE = 0.2565`, `final_unweighted_data_loss = 0.001679`
+  - rejected: `tail_parameters_not_stable`, `thermal_conductivity_outside_expected_material_range`
+  - parameter curve showed `k` passing through the plausible range around `800~1000` steps, then continuing upward.
+- Added a separate mini-batch script without deleting the formal script:
+  - `code/train_pinn_1d_minibatch.py`
+  - It reuses the same model, PDE, boundary/initial condition, output layout, and quality checks as `train_pinn_1d.py`.
+  - New option: `--data-batch-size`; default `16384`; use `0` for full data.
+  - Tests added in `tests/test_train_pinn_1d.py`.
+- Mini-batch result on the same `x=12~70` dataset:
+  - command used `--data-batch-size 16384`, `--epochs 2000`, `--material-preset 6061`
+  - output: `outputs/models/20260608_6061_100c_162125_x12_70_y28_32_start0_minibatch16384`
+  - `k = 389.77 W/(m*K)`, `alpha = 1.6040e-4 m^2/s`, `h = 10.44 W/(m^2*K)`
+  - `MSE = 0.2637`, `final_unweighted_data_loss = 0.001726`
+  - rejected: `tail_parameters_not_stable`, `thermal_conductivity_outside_expected_material_range`
+- Interpretation:
+  - Large mini-batch data loss did not fix the 6061 16:21 batch; the loss curve remains data-loss-low but PDE/parameter-driven, and `alpha/k` still climbs upward.
+  - The earlier GPT-5-mini quick result near `140 W/(m*K)` was an undertrained intermediate value around `800` steps, not a stable convergence result.
+  - This batch likely needs a model/constraint/ROI-boundary diagnosis rather than simply switching full data to mini-batch data loss.
+
+## 2026-06-11 PINN best-physical selection rule
+
+- Rechecked `thermal90-20260528-run01` from raw `.dat`:
+  - `.dat -> .npz` rerun used `fps=7`, ROI `x=0~80, y=28~32`, `mm_per_px=2.0`.
+  - 800-step rerun reproduced the historical result: `k = 159.79 W/(m*K)` vs historical `159.84`.
+  - Continuing the 800-step checkpoint for another 400 Adam steps lowered MSE but drove `k` upward to `226.04 W/(m*K)`, outside the 6061 expected range.
+- Current interpretation:
+  - This is not evidence that 6061 has `k≈226`; it is PINN parameter drift while the network keeps improving the fitted temperature surface.
+  - Temperature MSE alone is not a valid model-selection criterion for inverse conductivity.
+- Code direction:
+  - `train_pinn_1d.py` now selects `best_physical` by physical reportability rather than lowest MSE or final step.
+  - `best_physical` requires material-range `k`, stable `alpha/h` over a step-based window, acceptable data loss, and non-exploding PDE loss.
+  - If a best physical point is found, it must have a corresponding `*_best_physical_pinn.pt` checkpoint.
+  - New checkpoints store optimizer state, scheduler state, history, and completed step count for full resume.
+  - Legacy model-only checkpoints still load, but are marked `resume_mode = "model_only_legacy"`.
+
+## 2026-06-16 deterministic real-data estimator
+
+- Synthetic PDE data remain a valid PINN verification route, but the current full-domain PINN is not the formal estimator for arbitrary real recordings.
+- Added:
+  - `code/fit_thermal_parameters_forward.py`
+  - `code/run_real_forward_validation.py`
+  - `code/estimate_conductivity_from_experiment.py`
+- Root cause confirmed:
+  - full rod ROI crosses local support/contact heat-transfer regions;
+  - real residuals are hotter in the middle and colder near the far end;
+  - joint `k/h` fitting is weakly identifiable on short windows;
+  - treating an internal crop as a free rod end is invalid.
+- Formal real-data rule:
+  - known material H59 or 6061;
+  - heated-end windows `30/40/50/60 mm`;
+  - measured Dirichlet temperature at both window boundaries;
+  - fixed `h=10 W/(m^2*K)`;
+  - select the lowest validation-RMSE candidate inside the material quality range.
+- Accepted results:
+  - H59: `102.87`, `116.55`, `101.64 W/(m*K)`;
+  - 6061: `165.12`, `153.04 W/(m*K)`.
+- Rejected:
+  - 6061 2026-06-08 16:21; every candidate hit the `350 W/(m*K)` bound.
+- Detailed report:
+  - `docs/13-真实实验数据热导率反演修正与验证报告.md`
