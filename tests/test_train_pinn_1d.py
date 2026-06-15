@@ -39,6 +39,7 @@ class BaseArgs:
     alpha_init = 2.5e-5
     h_init = 12.0
     fixed_h = None
+    allow_joint_h_reporting = False
     visible_length_mm = 136.0
     diameter_mm = 8.0
     calibration_mode = "diameter"
@@ -263,6 +264,25 @@ class QualityCheckTests(unittest.TestCase):
         self.assertFalse(checks["parameters_stable"])
         self.assertFalse(checks["recommended_for_reporting"])
         self.assertIn("completed_steps_below_min_quality_steps", checks["warnings"])
+
+    def test_quality_checks_require_fixed_h_or_explicit_joint_h_override(self):
+        class JointArgs(BaseArgs):
+            min_quality_steps = 3
+            convergence_tail_steps = 3
+            fixed_h = None
+            allow_joint_h_reporting = False
+
+        history = [
+            {"alpha_m2_s": 2.0e-5, "h_w_m2k": 10.0},
+            {"alpha_m2_s": 2.01e-5, "h_w_m2k": 10.01},
+            {"alpha_m2_s": 2.0e-5, "h_w_m2k": 10.0},
+        ]
+        summary = {"completed_steps": 3, "thermal_conductivity_w_mk": 60.0}
+
+        checks = build_quality_checks(history, summary, JointArgs())
+
+        self.assertFalse(checks["recommended_for_reporting"])
+        self.assertIn("joint_h_requires_multistart_validation", checks["warnings"])
 
     def test_quality_checks_reject_out_of_material_range_result(self):
         class Args(BaseArgs):

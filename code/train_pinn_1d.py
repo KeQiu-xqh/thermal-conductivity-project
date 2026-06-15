@@ -71,6 +71,7 @@ def parse_args():
     parser.add_argument("--alpha-init", type=float, default=DEFAULT_ALPHA_INIT)
     parser.add_argument("--h-init", type=float, default=DEFAULT_H_INIT)
     parser.add_argument("--fixed-h", type=float, default=None)
+    parser.add_argument("--allow-joint-h-reporting", action="store_true")
     parser.add_argument("--lr-scheduler", choices=["none", "plateau"], default="none")
     parser.add_argument("--lr-factor", type=float, default=0.5)
     parser.add_argument("--lr-patience", type=int, default=200)
@@ -281,16 +282,27 @@ def build_quality_checks(history, summary, args):
         expected_k_in_range = float(expected_k_min) <= float(conductivity) <= float(expected_k_max)
 
     warnings = []
+    joint_h_requires_validation = (
+        getattr(args, "fixed_h", None) is None
+        and not bool(getattr(args, "allow_joint_h_reporting", False))
+    )
     if not enough_steps:
         warnings.append("completed_steps_below_min_quality_steps")
     if not parameters_stable:
         warnings.append("tail_parameters_not_stable")
     if expected_k_in_range is False:
         warnings.append("thermal_conductivity_outside_expected_material_range")
+    if joint_h_requires_validation:
+        warnings.append("joint_h_requires_multistart_validation")
     if expected_k_in_range is None:
-        recommended = enough_steps and parameters_stable
+        recommended = enough_steps and parameters_stable and not joint_h_requires_validation
     else:
-        recommended = enough_steps and parameters_stable and expected_k_in_range
+        recommended = (
+            enough_steps
+            and parameters_stable
+            and expected_k_in_range
+            and not joint_h_requires_validation
+        )
 
     return {
         "recommended_for_reporting": bool(recommended),
@@ -306,6 +318,7 @@ def build_quality_checks(history, summary, args):
         "expected_k_min": None if expected_k_min is None else float(expected_k_min),
         "expected_k_max": None if expected_k_max is None else float(expected_k_max),
         "expected_k_in_range": expected_k_in_range,
+        "joint_h_requires_multistart_validation": joint_h_requires_validation,
     }
 
 
