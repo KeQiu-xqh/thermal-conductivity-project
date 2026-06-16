@@ -16,12 +16,14 @@ if str(CODE_DIR) not in sys.path:
 import train_pinn_1d  # type: ignore
 import train_pinn_1d_minibatch  # type: ignore
 from train_pinn_1d import (  # type: ignore
+    DEFAULT_ALPHA_INIT,
     SimplePINN,
     apply_material_preset,
     build_best_physical_result,
     build_optimizer,
     build_quality_checks,
     compute_training_losses,
+    convert_alpha_to_conductivity,
     load_checkpoint_into_model,
     normalize_dataset,
     prepare_training_context,
@@ -236,6 +238,43 @@ class MaterialPresetTests(unittest.TestCase):
         self.assertEqual(args.cp, 380.0)
         self.assertEqual(args.expected_k_min, 80.0)
         self.assertEqual(args.expected_k_max, 120.0)
+
+    def test_material_preset_sets_reference_alpha_init_when_unspecified(self):
+        cases = [
+            ("h59", 110.0),
+            ("6061", 167.0),
+        ]
+        for preset, expected_k in cases:
+            with self.subTest(preset=preset):
+                class Args(BaseArgs):
+                    material_preset = preset
+                    alpha_init = None
+
+                args = apply_material_preset(Args())
+
+                self.assertAlmostEqual(args.alpha_init, expected_k / (args.rho * args.cp))
+                self.assertAlmostEqual(
+                    convert_alpha_to_conductivity(args.alpha_init, args.rho, args.cp),
+                    expected_k,
+                )
+
+    def test_explicit_alpha_init_overrides_material_reference(self):
+        class Args(BaseArgs):
+            material_preset = "6061"
+            alpha_init = 2.5e-5
+
+        args = apply_material_preset(Args())
+
+        self.assertEqual(args.alpha_init, 2.5e-5)
+
+    def test_custom_preset_keeps_default_alpha_init_when_unspecified(self):
+        class Args(BaseArgs):
+            material_preset = "custom"
+            alpha_init = None
+
+        args = apply_material_preset(Args())
+
+        self.assertEqual(args.alpha_init, DEFAULT_ALPHA_INIT)
 
     def test_explicit_expected_range_overrides_material_default(self):
         class Args(BaseArgs):
