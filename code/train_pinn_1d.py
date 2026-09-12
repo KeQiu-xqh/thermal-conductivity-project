@@ -38,9 +38,27 @@ DEFAULT_MEASURED_INITIAL_FRAME_COUNT = 5
 DEFAULT_RIGHT_BC_MODE = "none"
 DEFAULT_MATERIAL_PRESET = "custom"
 MATERIAL_PRESETS = {
-    "6061": {"rho": 2700.0, "cp": 900.0, "expected_k_min": 130.0, "expected_k_max": 190.0},
-    "304": {"rho": 7930.0, "cp": 500.0, "expected_k_min": 10.0, "expected_k_max": 25.0},
-    "h59": {"rho": 8500.0, "cp": 380.0, "expected_k_min": 80.0, "expected_k_max": 120.0},
+    "6061": {
+        "rho": 2700.0,
+        "cp": 900.0,
+        "reference_k": 167.0,
+        "expected_k_min": 130.0,
+        "expected_k_max": 190.0,
+    },
+    "304": {
+        "rho": 7930.0,
+        "cp": 500.0,
+        "reference_k": 17.5,
+        "expected_k_min": 10.0,
+        "expected_k_max": 25.0,
+    },
+    "h59": {
+        "rho": 8500.0,
+        "cp": 380.0,
+        "reference_k": 110.0,
+        "expected_k_min": 80.0,
+        "expected_k_max": 120.0,
+    },
 }
 
 
@@ -68,7 +86,7 @@ def parse_args():
     parser.add_argument("--emissivity", type=float, default=DEFAULT_EMISSIVITY)
     parser.add_argument("--sigma-sb", type=float, default=DEFAULT_SIGMA_SB)
     parser.add_argument("--t-inf-c", type=float, default=DEFAULT_T_INF_C)
-    parser.add_argument("--alpha-init", type=float, default=DEFAULT_ALPHA_INIT)
+    parser.add_argument("--alpha-init", type=float, default=None)
     parser.add_argument("--h-init", type=float, default=DEFAULT_H_INIT)
     parser.add_argument("--fixed-h", type=float, default=None)
     parser.add_argument("--allow-joint-h-reporting", action="store_true")
@@ -109,12 +127,16 @@ def parse_args():
 def apply_material_preset(args):
     preset = getattr(args, "material_preset", DEFAULT_MATERIAL_PRESET)
     if preset == "custom":
+        if getattr(args, "alpha_init", None) is None:
+            args.alpha_init = DEFAULT_ALPHA_INIT
         return args
     if preset not in MATERIAL_PRESETS:
         raise ValueError(f"Unsupported material preset: {preset}")
     config = MATERIAL_PRESETS[preset]
     args.rho = config["rho"]
     args.cp = config["cp"]
+    if getattr(args, "alpha_init", None) is None:
+        args.alpha_init = config["reference_k"] / (args.rho * args.cp)
     if getattr(args, "expected_k_min", None) is None:
         args.expected_k_min = config["expected_k_min"]
     if getattr(args, "expected_k_max", None) is None:

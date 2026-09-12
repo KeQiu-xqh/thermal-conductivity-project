@@ -556,3 +556,11 @@
   - 6061 2026-06-08 16:21; every candidate hit the `350 W/(m*K)` bound.
 - Detailed report:
   - `docs/13-真实实验数据热导率反演修正与验证报告.md`
+
+## 2026-06-16 PINN material alpha initialization
+
+- `code/train_pinn_1d.py` now distinguishes omitted `--alpha-init` from an explicit user override.
+- With `--material-preset h59` and no explicit `--alpha-init`, initial `alpha` is derived from `k=110 W/(m*K)`.
+- With `--material-preset 6061` and no explicit `--alpha-init`, initial `alpha` is derived from `k=167 W/(m*K)`.
+- `--material-preset custom` still falls back to the legacy `DEFAULT_ALPHA_INIT = 2.5e-5`.
+- This only changes the optimizer starting point; it does not change the PDE, loss terms, quality checks, or deterministic real-data estimator.
