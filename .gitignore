@@ -1,6 +1,11 @@
 __pycache__/
 *.py[cod]
 
-data/derived/synthetic_pinn/
-outputs/synthetic_pinn/
-outputs/models/synthetic_*/
+.codex/
+
+data/raw/*
+!data/raw/.gitkeep
+data/derived/*
+!data/derived/.gitkeep
+
+outputs/
